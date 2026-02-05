@@ -1,7 +1,6 @@
 const el = {
   conn: document.getElementById('conn'),
   pressure: document.getElementById('pressure'),
-  temp: document.getElementById('temp'),
   dac: document.getElementById('dac'),
   pwm: document.getElementById('pwm'),
   ble: document.getElementById('ble'),
@@ -32,6 +31,31 @@ let points = [];
 let windowSec = 60;
 let ws = null;
 let reconnectDelay = 500;
+let lastPressure = null;
+
+const CHART_Y_MIN = 0;
+const CHART_Y_MAX = 41;
+
+function getThresholdValue() {
+  const raw = parseFloat(el.inputs.threshold.value);
+  return Number.isFinite(raw) ? raw : null;
+}
+
+function updatePressureColor(pressure) {
+  if (!el.pressure) return;
+  const threshold = getThresholdValue();
+  if (!Number.isFinite(pressure) || !Number.isFinite(threshold)) {
+    el.pressure.classList.remove('pressure-high', 'pressure-low');
+    return;
+  }
+  if (pressure >= threshold) {
+    el.pressure.classList.add('pressure-high');
+    el.pressure.classList.remove('pressure-low');
+  } else {
+    el.pressure.classList.add('pressure-low');
+    el.pressure.classList.remove('pressure-high');
+  }
+}
 
 const chart = {
   canvas: document.getElementById('chart'),
@@ -71,9 +95,8 @@ function updateStatus(data) {
   if (!data) return;
   if (typeof data.pressure_kpa === 'number') {
     el.pressure.textContent = data.pressure_kpa.toFixed(2) + ' kPa';
-  }
-  if (typeof data.temp_c === 'number') {
-    el.temp.textContent = data.temp_c.toFixed(1) + ' ℃';
+    lastPressure = data.pressure_kpa;
+    updatePressureColor(lastPressure);
   }
   if (data.dac) {
     const code = data.dac.code ?? data.dac_code ?? 0;
@@ -112,6 +135,8 @@ function updateConfigForm(cfg) {
     windowSec = cfg.window_sec;
     el.chartMeta.textContent = `最近 ${windowSec} 秒`;
   }
+  updatePressureColor(lastPressure);
+  renderChart();
 }
 
 function collectConfig() {
@@ -187,19 +212,8 @@ function renderChart() {
     return;
   }
 
-  let minVal = visible[0].value;
-  let maxVal = visible[0].value;
-  for (const p of visible) {
-    if (p.value < minVal) minVal = p.value;
-    if (p.value > maxVal) maxVal = p.value;
-  }
-  if (minVal === maxVal) {
-    minVal -= 1;
-    maxVal += 1;
-  }
-  const pad = (maxVal - minVal) * 0.1;
-  minVal -= pad;
-  maxVal += pad;
+  const minVal = CHART_Y_MIN;
+  const maxVal = CHART_Y_MAX;
 
   ctx.strokeStyle = 'rgba(255,255,255,0.08)';
   ctx.lineWidth = 1;
@@ -211,12 +225,30 @@ function renderChart() {
     ctx.stroke();
   }
 
+  const threshold = getThresholdValue();
+  if (Number.isFinite(threshold)) {
+    const ratio = (threshold - minVal) / (maxVal - minVal);
+    const clamped = Math.min(1, Math.max(0, ratio));
+    const y = h - clamped * h;
+    ctx.save();
+    ctx.setLineDash([6, 6]);
+    ctx.strokeStyle = 'rgba(255, 107, 107, 0.7)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   ctx.strokeStyle = '#00d2ff';
   ctx.lineWidth = 2;
   ctx.beginPath();
   visible.forEach((p, idx) => {
     const x = ((p.ts - tMin) / (tMax - tMin)) * w;
-    const y = h - ((p.value - minVal) / (maxVal - minVal)) * h;
+    const ratio = (p.value - minVal) / (maxVal - minVal);
+    const clamped = Math.min(1, Math.max(0, ratio));
+    const y = h - clamped * h;
     if (idx === 0) {
       ctx.moveTo(x, y);
     } else {
@@ -282,6 +314,10 @@ el.buttons.save.addEventListener('click', () => postConfig(true, false));
 el.buttons.reset.addEventListener('click', () => postConfig(true, true));
 
 window.addEventListener('resize', () => chart.resize());
+el.inputs.threshold.addEventListener('input', () => {
+  updatePressureColor(lastPressure);
+  renderChart();
+});
 
 chart.resize();
 loadInitial();
