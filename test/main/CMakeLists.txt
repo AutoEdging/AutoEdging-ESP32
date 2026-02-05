@@ -1,3 +1,5 @@
-idf_component_register(SRCS "test.c"
+idf_component_register(SRCS "app_main.c"
                     INCLUDE_DIRS "."
-                    REQUIRES  bus_i2c dev_mcp_h11 dev_dac7571 act_pwm_ledc ble_belt nvs_flash)
+                    REQUIRES app)
+
+spiffs_create_partition_image(storage ../spiffs FLASH_IN_PROJECT)
