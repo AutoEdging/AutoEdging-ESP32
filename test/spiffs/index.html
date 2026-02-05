@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AutoEdging 控制面板</title>
+  <link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+  <div class="container">
+    <header class="card header">
+      <div class="title">
+        <div class="label">AutoEdging</div>
+        <div class="subtitle">ESP-IDF Web 控制面板</div>
+      </div>
+      <div class="status">
+        <span id="conn" class="badge offline">离线</span>
+        <div class="metric">
+          <div class="metric-label">压力</div>
+          <div class="metric-value" id="pressure">--.- kPa</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">温度</div>
+          <div class="metric-value" id="temp">--.- ℃</div>
+        </div>
+      </div>
+    </header>
+
+    <section class="card chart-card">
+      <div class="chart-header">
+        <div class="chart-title">压力曲线</div>
+        <div class="chart-meta" id="chart-meta">最近 60 秒</div>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="chart"></canvas>
+      </div>
+    </section>
+
+    <section class="card outputs">
+      <div class="section-title">输出状态</div>
+      <div class="output-grid">
+        <div class="output-item">
+          <div class="output-label">DAC</div>
+          <div class="output-value" id="dac">code ---, --.- V</div>
+        </div>
+        <div class="output-item">
+          <div class="output-label">PWM</div>
+          <div class="output-value" id="pwm">-- / -- / -- / --</div>
+        </div>
+        <div class="output-item">
+          <div class="output-label">BLE Belt</div>
+          <div class="output-value" id="ble">swing --, vibrate --</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card config">
+      <div class="section-title">参数配置</div>
+      <div class="form">
+        <div class="field">
+          <label>压力阈值 (kPa)</label>
+          <input id="cfg-threshold" type="number" step="0.1" />
+        </div>
+        <div class="field">
+          <label>采样频率 (Hz)</label>
+          <input id="cfg-sample" type="number" min="1" max="100" />
+        </div>
+        <div class="field">
+          <label>WS 推送 (Hz)</label>
+          <input id="cfg-ws" type="number" min="1" max="20" />
+        </div>
+        <div class="field">
+          <label>曲线窗口 (秒)</label>
+          <input id="cfg-window" type="number" min="30" max="120" />
+        </div>
+
+        <div class="field">
+          <label>DAC Code (0-4095)</label>
+          <input id="cfg-dac-code" type="number" min="0" max="4095" />
+        </div>
+        <div class="field">
+          <label>DAC Power-Down</label>
+          <select id="cfg-dac-pd">
+            <option value="0">Normal</option>
+            <option value="1">1K</option>
+            <option value="2">100K</option>
+            <option value="3">Hi-Z</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>PWM0 (permille)</label>
+          <input id="cfg-pwm0" type="number" min="0" max="1000" />
+        </div>
+        <div class="field">
+          <label>PWM1 (permille)</label>
+          <input id="cfg-pwm1" type="number" min="0" max="1000" />
+        </div>
+        <div class="field">
+          <label>PWM2 (permille)</label>
+          <input id="cfg-pwm2" type="number" min="0" max="1000" />
+        </div>
+        <div class="field">
+          <label>PWM3 (permille)</label>
+          <input id="cfg-pwm3" type="number" min="0" max="1000" />
+        </div>
+
+        <div class="field">
+          <label>BLE Swing (0-10)</label>
+          <input id="cfg-ble-swing" type="number" min="0" max="10" />
+        </div>
+        <div class="field">
+          <label>BLE Vibrate (0-10)</label>
+          <input id="cfg-ble-vibrate" type="number" min="0" max="10" />
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="btn-apply" class="btn">应用</button>
+        <button id="btn-save" class="btn primary">保存</button>
+        <button id="btn-reset" class="btn danger">恢复默认</button>
+      </div>
+      <div id="toast" class="toast"></div>
+    </section>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

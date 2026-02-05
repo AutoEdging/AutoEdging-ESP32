@@ -1,0 +1,19 @@
+menu "App Configuration"
+
+config APP_WIFI_SSID
+    string "Wi-Fi SSID"
+    default ""
+
+config APP_WIFI_PASSWORD
+    string "Wi-Fi Password"
+    default ""
+
+config APP_WIFI_MAX_RETRY
+    int "Wi-Fi Max Retry"
+    default 10
+
+config APP_MDNS_HOSTNAME
+    string "mDNS Hostname"
+    default "autoedging"
+
+endmenu
