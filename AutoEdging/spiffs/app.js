@@ -5,7 +5,10 @@ const el = {
   pwm: document.getElementById('pwm'),
   ble: document.getElementById('ble'),
   chartMeta: document.getElementById('chart-meta'),
-  toast: document.getElementById('toast'),
+  nav: {
+    tabs: Array.from(document.querySelectorAll('.tab-btn')),
+    pages: Array.from(document.querySelectorAll('.page')),
+  },
   game: {
     state: document.getElementById('game-state'),
     running: document.getElementById('game-running'),
@@ -26,6 +29,7 @@ const el = {
       rate: document.getElementById('game-rate'),
       sensitivity: document.getElementById('game-sensitivity'),
       random: document.getElementById('game-random'),
+      randomInterval: document.getElementById('game-random-interval'),
       increase: document.getElementById('game-increase'),
       shockVoltage: document.getElementById('game-shock-voltage'),
       midMin: document.getElementById('game-mid-min'),
@@ -47,22 +51,42 @@ const el = {
       reset: document.getElementById('btn-game-reset'),
     },
   },
-  inputs: {
-    sample: document.getElementById('cfg-sample'),
-    ws: document.getElementById('cfg-ws'),
-    window: document.getElementById('cfg-window'),
-    dacCode: document.getElementById('cfg-dac-code'),
-    dacPd: document.getElementById('cfg-dac-pd'),
-    pwm0: document.getElementById('cfg-pwm0'),
-    pwm1: document.getElementById('cfg-pwm1'),
-    pwm2: document.getElementById('cfg-pwm2'),
-    pwm3: document.getElementById('cfg-pwm3'),
-    bleSwing: document.getElementById('cfg-ble-swing'),
-    bleVibrate: document.getElementById('cfg-ble-vibrate'),
+  manual: {
+    toast: document.getElementById('manual-toast'),
+    inputs: {
+      dacCode: document.getElementById('cfg-dac-code'),
+      dacPd: document.getElementById('cfg-dac-pd'),
+      pwm0: document.getElementById('cfg-pwm0'),
+      pwm1: document.getElementById('cfg-pwm1'),
+      pwm2: document.getElementById('cfg-pwm2'),
+      pwm3: document.getElementById('cfg-pwm3'),
+      bleSwing: document.getElementById('cfg-ble-swing'),
+      bleVibrate: document.getElementById('cfg-ble-vibrate'),
+    },
+    pwmValues: {
+      pwm0: document.getElementById('cfg-pwm0-value'),
+      pwm1: document.getElementById('cfg-pwm1-value'),
+      pwm2: document.getElementById('cfg-pwm2-value'),
+      pwm3: document.getElementById('cfg-pwm3-value'),
+    },
+    buttons: {
+      save: document.getElementById('btn-manual-save'),
+      reset: document.getElementById('btn-manual-reset'),
+      bleSwingStop: document.getElementById('btn-ble-swing-stop'),
+      bleVibrateStop: document.getElementById('btn-ble-vibrate-stop'),
+    },
   },
-  buttons: {
-    save: document.getElementById('btn-save'),
-    reset: document.getElementById('btn-reset'),
+  system: {
+    toast: document.getElementById('system-toast'),
+    inputs: {
+      sample: document.getElementById('cfg-sample'),
+      ws: document.getElementById('cfg-ws'),
+      window: document.getElementById('cfg-window'),
+    },
+    buttons: {
+      save: document.getElementById('btn-system-save'),
+      reset: document.getElementById('btn-system-reset'),
+    },
   },
 };
 
@@ -70,21 +94,47 @@ let points = [];
 let windowSec = 60;
 let ws = null;
 let reconnectDelay = 500;
+let reconnectTimer = null;
+let wsLastMessageMs = 0;
 let lastPressure = null;
 let gameStatus = {};
 let gameConfig = {};
 let gameRunning = false;
 
+const WS_STALE_TIMEOUT_MS = 1000;
+const WS_WATCHDOG_INTERVAL_MS = 200;
+
 const GAME_STATE_TEXT = {
-  INITIAL_CALM: '初始平静期',
-  MIDDLE: '中期抑制期',
-  EDGING: '边缘等待回落',
-  DELAY: '冷却倒计时',
-  SUB_CALM: '后续平静期',
+  INITIAL_CALM: '乖乖蓄欲期…慢慢涨起来哦',
+  MIDDLE:       '忍耐中期…不准太快缴械',
+  EDGING:       '边缘颤抖中…敢再往前一步试试？',
+  DELAY:        '惩罚冷却…数着秒呼吸，宝贝',
+  SUB_CALM:     '被放过后的小喘息…又要开始被玩坏了呢',
 };
 
-const CHART_Y_MIN = 0;
-const CHART_Y_MAX = 41;
+const SENSOR_PRESSURE_MAX_KPA = 45;
+const CHART_Y_BASE_MIN = 0;
+const CHART_Y_DYNAMIC_MIN_CAP = 13;
+const CHART_Y_MIN_VISIBLE_MAX = 12;
+const CHART_Y_FOOTROOM_KPA = 1;
+const CHART_Y_HEADROOM_KPA = 2;
+const CHART_Y_CRITICAL_MARGIN_KPA = 2.0;
+const CHART_Y_SHRINK_RATE = 0.18;
+
+const PWM_KEYS = ['pwm0', 'pwm1', 'pwm2', 'pwm3'];
+const CONTROL_DEFAULTS = {
+  sampleHz: 25,
+  wsHz: 5,
+  windowSec: 60,
+  dacCode: 0,
+  dacPd: 0,
+  pwmPermille: [0, 0, 0, 0],
+  bleSwing: 0,
+  bleVibrate: 0,
+};
+
+let chartYMin = CHART_Y_BASE_MIN;
+let chartYMax = SENSOR_PRESSURE_MAX_KPA;
 
 function getGameThresholds() {
   const midRaw = Number(gameConfig.midPressure);
@@ -92,6 +142,81 @@ function getGameThresholds() {
   const mid = Number.isFinite(midRaw) ? midRaw : null;
   const critical = Number.isFinite(critRaw) ? critRaw : null;
   return { mid, critical };
+}
+
+function calcChartTargetYMax(visible) {
+  let maxPressure = CHART_Y_BASE_MIN;
+  for (const p of visible) {
+    if (Number.isFinite(p.value) && p.value > maxPressure) {
+      maxPressure = p.value;
+    }
+  }
+
+  const { critical } = getGameThresholds();
+  let target = maxPressure + CHART_Y_HEADROOM_KPA;
+  if (Number.isFinite(critical)) {
+    target = Math.max(target, critical + CHART_Y_CRITICAL_MARGIN_KPA);
+  }
+  target = Math.max(target, CHART_Y_MIN_VISIBLE_MAX);
+
+  // Keep scaling moderate for this 45kPa sensor, unless critical line requires more.
+  if (!(Number.isFinite(critical) && critical > SENSOR_PRESSURE_MAX_KPA)) {
+    target = Math.min(target, SENSOR_PRESSURE_MAX_KPA);
+  }
+  return target;
+}
+
+function calcChartTargetYMin(visible) {
+  let minPressure = Number.POSITIVE_INFINITY;
+  for (const p of visible) {
+    if (Number.isFinite(p.value) && p.value < minPressure) {
+      minPressure = p.value;
+    }
+  }
+  if (!Number.isFinite(minPressure)) {
+    return CHART_Y_BASE_MIN;
+  }
+
+  const { critical } = getGameThresholds();
+  let target = minPressure - CHART_Y_FOOTROOM_KPA;
+  if (Number.isFinite(critical)) {
+    target = Math.min(target, critical - CHART_Y_CRITICAL_MARGIN_KPA);
+  }
+  target = Math.max(target, CHART_Y_BASE_MIN);
+  target = Math.min(target, CHART_Y_DYNAMIC_MIN_CAP);
+  return target;
+}
+
+function smoothChartYMin(target) {
+  if (!Number.isFinite(chartYMin) || chartYMin < CHART_Y_BASE_MIN) {
+    chartYMin = target;
+    return chartYMin;
+  }
+  if (target <= chartYMin) {
+    chartYMin = target;
+    return chartYMin;
+  }
+  chartYMin += (target - chartYMin) * CHART_Y_SHRINK_RATE;
+  if (Math.abs(chartYMin - target) < 0.1) {
+    chartYMin = target;
+  }
+  return chartYMin;
+}
+
+function smoothChartYMax(target) {
+  if (!Number.isFinite(chartYMax) || chartYMax <= CHART_Y_BASE_MIN) {
+    chartYMax = target;
+    return chartYMax;
+  }
+  if (target >= chartYMax) {
+    chartYMax = target;
+    return chartYMax;
+  }
+  chartYMax += (target - chartYMax) * CHART_Y_SHRINK_RATE;
+  if (Math.abs(chartYMax - target) < 0.1) {
+    chartYMax = target;
+  }
+  return chartYMax;
 }
 
 function updatePressureColor(pressure) {
@@ -130,11 +255,6 @@ const chart = {
   },
 };
 
-function setToast(msg, isError = false) {
-  el.toast.textContent = msg || '';
-  el.toast.style.color = isError ? '#ffb3b3' : 'rgba(230,237,243,0.65)';
-}
-
 function setGameToast(msg, isError = false) {
   if (!el.game.toast) return;
   el.game.toast.textContent = msg || '';
@@ -145,6 +265,36 @@ function setGameConfigToast(msg, isError = false) {
   if (!el.game.configToast) return;
   el.game.configToast.textContent = msg || '';
   el.game.configToast.style.color = isError ? '#ffb3b3' : 'rgba(230,237,243,0.65)';
+}
+
+function setManualToast(msg, isError = false) {
+  if (!el.manual.toast) return;
+  el.manual.toast.textContent = msg || '';
+  el.manual.toast.style.color = isError ? '#ffb3b3' : 'rgba(230,237,243,0.65)';
+}
+
+function setSystemToast(msg, isError = false) {
+  if (!el.system.toast) return;
+  el.system.toast.textContent = msg || '';
+  el.system.toast.style.color = isError ? '#ffb3b3' : 'rgba(230,237,243,0.65)';
+}
+
+function parseIntOr(value, fallback) {
+  const n = parseInt(value, 10);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function parseFloatOr(value, fallback) {
+  const n = parseFloat(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function setManualPwmValue(key, value) {
+  const v = Math.max(0, Math.min(100, parseFloatOr(value, 0)));
+  const field = el.manual.inputs[key];
+  const view = el.manual.pwmValues[key];
+  if (field) field.value = v.toFixed(1);
+  if (view) view.textContent = `${v.toFixed(1)}%`;
 }
 
 function setConnection(online) {
@@ -183,22 +333,24 @@ function updateStatus(data) {
 
 function updateConfigForm(cfg) {
   if (!cfg) return;
-  el.inputs.sample.value = cfg.sample_hz ?? 25;
-  el.inputs.ws.value = cfg.ws_hz ?? 5;
-  el.inputs.window.value = cfg.window_sec ?? 60;
+  el.system.inputs.sample.value = cfg.sample_hz ?? CONTROL_DEFAULTS.sampleHz;
+  el.system.inputs.ws.value = cfg.ws_hz ?? CONTROL_DEFAULTS.wsHz;
+  el.system.inputs.window.value = cfg.window_sec ?? CONTROL_DEFAULTS.windowSec;
   if (cfg.dac) {
-    el.inputs.dacCode.value = cfg.dac.code ?? 0;
-    el.inputs.dacPd.value = cfg.dac.pd_mode ?? 0;
+    el.manual.inputs.dacCode.value = cfg.dac.code ?? CONTROL_DEFAULTS.dacCode;
+    el.manual.inputs.dacPd.value = cfg.dac.pd_mode ?? CONTROL_DEFAULTS.dacPd;
   }
   if (Array.isArray(cfg.pwm)) {
-    el.inputs.pwm0.value = ((cfg.pwm[0] ?? 0) / 10).toFixed(1);
-    el.inputs.pwm1.value = ((cfg.pwm[1] ?? 0) / 10).toFixed(1);
-    el.inputs.pwm2.value = ((cfg.pwm[2] ?? 0) / 10).toFixed(1);
-    el.inputs.pwm3.value = ((cfg.pwm[3] ?? 0) / 10).toFixed(1);
+    setManualPwmValue('pwm0', (cfg.pwm[0] ?? 0) / 10);
+    setManualPwmValue('pwm1', (cfg.pwm[1] ?? 0) / 10);
+    setManualPwmValue('pwm2', (cfg.pwm[2] ?? 0) / 10);
+    setManualPwmValue('pwm3', (cfg.pwm[3] ?? 0) / 10);
+  } else {
+    PWM_KEYS.forEach((key, idx) => setManualPwmValue(key, (CONTROL_DEFAULTS.pwmPermille[idx] ?? 0) / 10));
   }
   if (cfg.ble) {
-    el.inputs.bleSwing.value = cfg.ble.swing ?? 0;
-    el.inputs.bleVibrate.value = cfg.ble.vibrate ?? 0;
+    el.manual.inputs.bleSwing.value = cfg.ble.swing ?? CONTROL_DEFAULTS.bleSwing;
+    el.manual.inputs.bleVibrate.value = cfg.ble.vibrate ?? CONTROL_DEFAULTS.bleVibrate;
   }
   if (typeof cfg.window_sec === 'number') {
     windowSec = cfg.window_sec;
@@ -209,33 +361,44 @@ function updateConfigForm(cfg) {
 }
 
 function setManualEnabled(enabled) {
-  Object.values(el.inputs).forEach((input) => {
+  Object.values(el.manual.inputs).forEach((input) => {
     if (input) input.disabled = !enabled;
   });
-  Object.values(el.buttons).forEach((btn) => {
+  Object.values(el.manual.buttons).forEach((btn) => {
+    if (btn) btn.disabled = !enabled;
+  });
+  Object.values(el.system.inputs).forEach((input) => {
+    if (input) input.disabled = !enabled;
+  });
+  Object.values(el.system.buttons).forEach((btn) => {
     if (btn) btn.disabled = !enabled;
   });
 }
 
-function collectConfig() {
+function collectManualConfig() {
   return {
-    sample_hz: parseInt(el.inputs.sample.value, 10),
-    ws_hz: parseInt(el.inputs.ws.value, 10),
-    window_sec: parseInt(el.inputs.window.value, 10),
     dac: {
-      code: parseInt(el.inputs.dacCode.value, 10),
-      pd_mode: parseInt(el.inputs.dacPd.value, 10),
+      code: parseIntOr(el.manual.inputs.dacCode.value, CONTROL_DEFAULTS.dacCode),
+      pd_mode: parseIntOr(el.manual.inputs.dacPd.value, CONTROL_DEFAULTS.dacPd),
     },
     pwm: [
-      Math.round(parseFloat(el.inputs.pwm0.value || '0') * 10),
-      Math.round(parseFloat(el.inputs.pwm1.value || '0') * 10),
-      Math.round(parseFloat(el.inputs.pwm2.value || '0') * 10),
-      Math.round(parseFloat(el.inputs.pwm3.value || '0') * 10),
+      Math.round(parseFloatOr(el.manual.inputs.pwm0.value, 0) * 10),
+      Math.round(parseFloatOr(el.manual.inputs.pwm1.value, 0) * 10),
+      Math.round(parseFloatOr(el.manual.inputs.pwm2.value, 0) * 10),
+      Math.round(parseFloatOr(el.manual.inputs.pwm3.value, 0) * 10),
     ],
     ble: {
-      swing: parseInt(el.inputs.bleSwing.value, 10),
-      vibrate: parseInt(el.inputs.bleVibrate.value, 10),
+      swing: parseIntOr(el.manual.inputs.bleSwing.value, CONTROL_DEFAULTS.bleSwing),
+      vibrate: parseIntOr(el.manual.inputs.bleVibrate.value, CONTROL_DEFAULTS.bleVibrate),
     },
+  };
+}
+
+function collectSystemConfig() {
+  return {
+    sample_hz: parseIntOr(el.system.inputs.sample.value, CONTROL_DEFAULTS.sampleHz),
+    ws_hz: parseIntOr(el.system.inputs.ws.value, CONTROL_DEFAULTS.wsHz),
+    window_sec: parseIntOr(el.system.inputs.window.value, CONTROL_DEFAULTS.windowSec),
   };
 }
 
@@ -249,7 +412,8 @@ function updateGameConfigForm(cfg) {
   el.game.inputs.delay.value = cfg.lowPressureDelay ?? 5;
   el.game.inputs.rate.value = cfg.stimulationRampRateLimit ?? 2;
   el.game.inputs.sensitivity.value = cfg.pressureSensitivity ?? 15;
-  el.game.inputs.random.value = cfg.stimulationRampRandomPercent ?? 0;
+  el.game.inputs.random.value = cfg.stimulationRampRandomPercent ?? 30;
+  el.game.inputs.randomInterval.value = cfg.stimulationRampRandomInterval ?? 1;
   el.game.inputs.increase.value = cfg.intensityGradualIncrease ?? 2;
   el.game.inputs.shockVoltage.value = cfg.shockIntensity ?? 1.2;
   el.game.inputs.midMin.value = cfg.midMinIntensity ?? 5;
@@ -284,6 +448,7 @@ function collectGameConfig() {
     stimulationRampRateLimit: parseFloat(el.game.inputs.rate.value),
     pressureSensitivity: parseFloat(el.game.inputs.sensitivity.value),
     stimulationRampRandomPercent: parseFloat(el.game.inputs.random.value),
+    stimulationRampRandomInterval: parseFloat(el.game.inputs.randomInterval.value),
     intensityGradualIncrease: parseFloat(el.game.inputs.increase.value),
     shockIntensity: parseFloat(el.game.inputs.shockVoltage.value),
     midMinIntensity: parseFloat(el.game.inputs.midMin.value),
@@ -392,24 +557,63 @@ function updateGameStatus(data) {
   renderChart();
 }
 
-async function postConfig(save = true, reset = false) {
-  setToast('正在提交...');
-  const body = reset ? { reset: true, save } : { ...collectConfig(), save };
+async function postManualConfig(save = true) {
+  setManualToast('正在提交...');
   try {
     const res = await fetch('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...collectManualConfig(), save }),
     });
     const data = await res.json();
     if (!res.ok) {
       throw new Error(data.error || '提交失败');
     }
     updateConfigForm(data);
-    setToast(save ? '保存成功' : '已应用');
+    setManualToast(save ? '保存成功' : '已应用');
+    setSystemToast('');
   } catch (err) {
-    setToast(err.message, true);
+    setManualToast(err.message, true);
   }
+}
+
+async function postSystemConfig(save = true) {
+  setSystemToast('正在提交...');
+  try {
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...collectSystemConfig(), save }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || '提交失败');
+    }
+    updateConfigForm(data);
+    setSystemToast(save ? '保存成功' : '已应用');
+    setManualToast('');
+  } catch (err) {
+    setSystemToast(err.message, true);
+  }
+}
+
+function resetManualConfigToDefaults() {
+  el.manual.inputs.dacCode.value = CONTROL_DEFAULTS.dacCode;
+  el.manual.inputs.dacPd.value = CONTROL_DEFAULTS.dacPd;
+  PWM_KEYS.forEach((key, idx) => {
+    const v = (CONTROL_DEFAULTS.pwmPermille[idx] ?? 0) / 10;
+    setManualPwmValue(key, v);
+  });
+  el.manual.inputs.bleSwing.value = CONTROL_DEFAULTS.bleSwing;
+  el.manual.inputs.bleVibrate.value = CONTROL_DEFAULTS.bleVibrate;
+  postManualConfig(true);
+}
+
+function resetSystemConfigToDefaults() {
+  el.system.inputs.sample.value = CONTROL_DEFAULTS.sampleHz;
+  el.system.inputs.ws.value = CONTROL_DEFAULTS.wsHz;
+  el.system.inputs.window.value = CONTROL_DEFAULTS.windowSec;
+  postSystemConfig(true);
 }
 
 function addPoint(ts, value) {
@@ -442,8 +646,11 @@ function renderChart() {
     return;
   }
 
-  const minVal = CHART_Y_MIN;
-  const maxVal = CHART_Y_MAX;
+  const targetYMin = calcChartTargetYMin(visible);
+  const minVal = smoothChartYMin(targetYMin);
+  const targetYMax = calcChartTargetYMax(visible);
+  const maxVal = smoothChartYMax(targetYMax);
+  const range = Math.max(1e-6, maxVal - minVal);
 
   ctx.strokeStyle = 'rgba(255,255,255,0.08)';
   ctx.lineWidth = 1;
@@ -457,7 +664,7 @@ function renderChart() {
 
   const { critical } = getGameThresholds();
   if (Number.isFinite(critical)) {
-    const ratio = (critical - minVal) / (maxVal - minVal);
+    const ratio = (critical - minVal) / range;
     const clamped = Math.min(1, Math.max(0, ratio));
     const y = h - clamped * h;
     ctx.save();
@@ -476,7 +683,7 @@ function renderChart() {
   ctx.beginPath();
   visible.forEach((p, idx) => {
     const x = ((p.ts - tMin) / (tMax - tMin)) * w;
-    const ratio = (p.value - minVal) / (maxVal - minVal);
+    const ratio = (p.value - minVal) / range;
     const clamped = Math.min(1, Math.max(0, ratio));
     const y = h - clamped * h;
     if (idx === 0) {
@@ -493,17 +700,31 @@ function renderChart() {
 }
 
 function connectWs() {
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}/ws`);
 
   ws.onopen = () => {
     setConnection(true);
+    wsLastMessageMs = Date.now();
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
     reconnectDelay = 500;
   };
 
   ws.onclose = () => {
     setConnection(false);
-    setTimeout(connectWs, reconnectDelay);
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+    }
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connectWs();
+    }, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 1.8, 5000);
   };
 
@@ -521,6 +742,7 @@ function connectWs() {
       if (typeof data.ts === 'number' && typeof data.pressure_kpa === 'number') {
         addPoint(data.ts, data.pressure_kpa);
       }
+      wsLastMessageMs = Date.now();
     } catch (err) {
       console.warn('ws parse error', err);
     }
@@ -544,7 +766,9 @@ async function loadInitial() {
     const gst = await gameStRes.json();
     updateGameStatus(gst);
   } catch (err) {
-    setToast('加载配置失败', true);
+    setGameToast('加载配置失败', true);
+    setManualToast('加载配置失败', true);
+    setSystemToast('加载配置失败', true);
   }
 }
 
@@ -631,8 +855,52 @@ function setupHelpPopovers() {
   }, true);
 }
 
-el.buttons.save.addEventListener('click', () => postConfig(true, false));
-el.buttons.reset.addEventListener('click', () => postConfig(true, true));
+function showPage(pageId) {
+  el.nav.pages.forEach((page) => {
+    page.classList.toggle('is-active', page.id === pageId);
+  });
+  el.nav.tabs.forEach((tab) => {
+    tab.classList.toggle('active', tab.dataset.page === pageId);
+  });
+  closeHelpPopover();
+  if (pageId === 'page-game') {
+    requestAnimationFrame(() => chart.resize());
+  }
+}
+
+function setupPageTabs() {
+  el.nav.tabs.forEach((tab) => {
+    tab.addEventListener('click', () => {
+      const pageId = tab.dataset.page;
+      if (!pageId) return;
+      showPage(pageId);
+    });
+  });
+}
+
+function setupManualControls() {
+  PWM_KEYS.forEach((key) => {
+    const slider = el.manual.inputs[key];
+    if (!slider) return;
+    slider.addEventListener('input', () => {
+      setManualPwmValue(key, slider.value);
+    });
+  });
+}
+
+el.manual.buttons.save.addEventListener('click', () => postManualConfig(true));
+el.manual.buttons.reset.addEventListener('click', () => resetManualConfigToDefaults());
+el.manual.buttons.bleSwingStop.addEventListener('click', () => {
+  el.manual.inputs.bleSwing.value = 0;
+  postManualConfig(true);
+});
+el.manual.buttons.bleVibrateStop.addEventListener('click', () => {
+  el.manual.inputs.bleVibrate.value = 0;
+  postManualConfig(true);
+});
+
+el.system.buttons.save.addEventListener('click', () => postSystemConfig(true));
+el.system.buttons.reset.addEventListener('click', () => resetSystemConfigToDefaults());
 
 el.game.buttons.save.addEventListener('click', () => postGameConfig(true, false));
 el.game.buttons.reset.addEventListener('click', () => postGameConfig(true, true));
@@ -641,9 +909,25 @@ el.game.buttons.pause.addEventListener('click', () => postGameControl('pause'));
 el.game.buttons.stop.addEventListener('click', () => postGameControl('stop'));
 el.game.buttons.shock.addEventListener('click', () => postGameControl('shockOnce'));
 
+setupPageTabs();
+setupManualControls();
 setupHelpPopovers();
 
-window.addEventListener('resize', () => chart.resize());
+window.addEventListener('resize', () => {
+  if (document.getElementById('page-game').classList.contains('is-active')) {
+    chart.resize();
+  }
+});
 chart.resize();
 loadInitial();
 connectWs();
+
+setInterval(() => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  if (Date.now() - wsLastMessageMs > WS_STALE_TIMEOUT_MS) {
+    console.warn('ws stale, reconnecting...');
+    ws.close();
+  }
+}, WS_WATCHDOG_INTERVAL_MS);

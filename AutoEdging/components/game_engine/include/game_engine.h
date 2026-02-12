@@ -16,7 +16,7 @@
 extern "C" {
 #endif
 
-#define GAME_CONFIG_VERSION 4
+#define GAME_CONFIG_VERSION 5
 #define GAME_PRESSURE_HISTORY_LEN 60
 
 typedef enum {
@@ -35,6 +35,7 @@ typedef struct {
     float stimulation_ramp_rate_limit;
     float pressure_sensitivity;
     float stimulation_ramp_random_percent;
+    float stimulation_ramp_random_interval_s;
     float intensity_gradual_increase;
     float shock_voltage;
     float mid_pressure_kpa;
@@ -62,8 +63,10 @@ typedef struct {
     float target_intensity;
     float current_intensity;
     float mid_intensity;
+    float random_factor;
     int64_t last_update_ms;
     int64_t last_intensity_update_ms;
+    int64_t last_random_update_ms;
     float prev_pressure;
 
     bool is_shocking;

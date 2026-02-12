@@ -394,7 +394,7 @@ static void sensor_task(void *arg)
         }
 
         int64_t ts_ms = esp_timer_get_time() / 1000;
-        if (err == ESP_OK) {
+        if (err == ESP_OK && sample.status != 0x00) {
             control_service_update_sensor(&s_service, sample.pressure_kpa, sample.temp_c, sample.status, ts_ms);
             telemetry_point_t tp = {
                 .ts_ms = ts_ms,
@@ -409,7 +409,11 @@ static void sensor_task(void *arg)
             game_engine_on_sample(&s_game, sample.pressure_kpa, ts_ms);
         } else {
             if ((ts_ms - last_log_ms) > 1000) {
-                ESP_LOGW(TAG, "mcp read failed: %s", esp_err_to_name(err));
+                if (err != ESP_OK) {
+                    ESP_LOGW(TAG, "mcp read failed: %s", esp_err_to_name(err));
+                } else {
+                    ESP_LOGW(TAG, "mcp sample dropped: invalid status=0x%02X", sample.status);
+                }
                 last_log_ms = ts_ms;
             }
         }

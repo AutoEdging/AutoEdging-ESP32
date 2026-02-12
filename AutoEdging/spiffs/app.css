@@ -32,6 +32,15 @@ body {
   gap: 16px;
 }
 
+.page {
+  display: none;
+  gap: 16px;
+}
+
+.page.is-active {
+  display: grid;
+}
+
 .card {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -47,6 +56,36 @@ body {
   justify-content: space-between;
   align-items: center;
   gap: 16px;
+}
+
+.page-nav {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+}
+
+.tab-btn {
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
+}
+
+.tab-btn:hover {
+  color: var(--text);
+  transform: translateY(-1px);
+}
+
+.tab-btn.active {
+  background: linear-gradient(120deg, var(--accent), var(--accent-2));
+  border: none;
+  color: #001018;
+  font-weight: 600;
 }
 
 .title .label {
@@ -263,6 +302,10 @@ body {
   gap: 12px;
 }
 
+.manual-form {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -290,6 +333,44 @@ body {
   box-shadow: 0 0 0 2px rgba(0, 210, 255, 0.2);
 }
 
+.inline-control {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.inline-control input {
+  flex: 1;
+}
+
+.inline-control .btn {
+  padding: 9px 12px;
+  white-space: nowrap;
+}
+
+.slider-field {
+  justify-content: flex-end;
+}
+
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.range-input {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.slider-value {
+  min-width: 58px;
+  text-align: right;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
 .actions {
   margin-top: 16px;
   display: flex;
@@ -310,6 +391,13 @@ body {
 .btn:hover {
   transform: translateY(-1px);
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  transform: none;
+  box-shadow: none;
 }
 
 .btn.primary {
@@ -333,9 +421,28 @@ body {
 }
 
 @media (max-width: 640px) {
+  .page-nav {
+    gap: 8px;
+  }
+
+  .tab-btn {
+    flex: 1 1 30%;
+    text-align: center;
+  }
+
+  .slider-row {
+    gap: 8px;
+  }
+
+  .inline-control {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
   .metric-value {
     font-size: 16px;
   }
+
   .chart-wrap {
     height: 220px;
   }
