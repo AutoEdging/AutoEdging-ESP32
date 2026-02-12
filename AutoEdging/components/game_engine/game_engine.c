@@ -63,7 +63,8 @@ void game_config_set_defaults(game_config_t *cfg)
     cfg->low_pressure_delay_s = 15.0f;
     cfg->stimulation_ramp_rate_limit = 2.0f;
     cfg->pressure_sensitivity = 15.0f;
-    cfg->stimulation_ramp_random_percent = 0.0f;
+    cfg->stimulation_ramp_random_percent = 30.0f;
+    cfg->stimulation_ramp_random_interval_s = 1.0f;
     cfg->intensity_gradual_increase = 2.0f;
     cfg->shock_voltage = 1.2f;
     cfg->mid_pressure_kpa = 19.0f;
@@ -113,6 +114,9 @@ esp_err_t game_config_validate(const game_config_t *cfg, char *err_msg, size_t e
     }
     if (cfg->stimulation_ramp_random_percent < 0.0f || cfg->stimulation_ramp_random_percent > 100.0f) {
         return validate_range_bool(false, "stimulationRampRandomPercent out of range", err_msg, err_len);
+    }
+    if (cfg->stimulation_ramp_random_interval_s < 0.1f || cfg->stimulation_ramp_random_interval_s > 10.0f) {
+        return validate_range_bool(false, "stimulationRampRandomInterval out of range", err_msg, err_len);
     }
     if (cfg->intensity_gradual_increase < 0.0f || cfg->intensity_gradual_increase > 50.0f) {
         return validate_range_bool(false, "intensityGradualIncrease out of range", err_msg, err_len);
@@ -362,6 +366,44 @@ static void game_apply_outputs_locked(game_engine_t *g)
     }
 }
 
+static float game_compute_randomized_target_locked(game_engine_t *g, int64_t now_ms)
+{
+    if (!g) {
+        return 0.0f;
+    }
+    const game_config_t *cfg = &g->config;
+    float random_percent = cfg->stimulation_ramp_random_percent;
+    if (random_percent < 0.0f) {
+        random_percent = 0.0f;
+    }
+
+    if (random_percent <= 0.0f) {
+        g->status.random_factor = 1.0f;
+        g->status.last_random_update_ms = now_ms;
+    } else {
+        float interval_s = cfg->stimulation_ramp_random_interval_s;
+        if (interval_s < 0.01f) {
+            interval_s = 0.01f;
+        }
+        int64_t interval_ms = (int64_t)(interval_s * 1000.0f + 0.5f);
+        if (interval_ms < 1) {
+            interval_ms = 1;
+        }
+        if (g->status.last_random_update_ms <= 0 ||
+            (now_ms - g->status.last_random_update_ms) >= interval_ms) {
+            g->status.random_factor = 1.0f + rand_unit() * (random_percent / 100.0f);
+            g->status.last_random_update_ms = now_ms;
+        }
+    }
+
+    if (g->status.random_factor < 0.0f) {
+        g->status.random_factor = 0.0f;
+    }
+
+    float target = g->status.unrandom_intensity * g->status.random_factor;
+    return clampf(target, 0.0f, cfg->max_motor_intensity);
+}
+
 static void game_calculate_state_locked(game_engine_t *g, int64_t now_ms)
 {
     float dt_sec = 0.0f;
@@ -380,10 +422,8 @@ static void game_calculate_state_locked(game_engine_t *g, int64_t now_ms)
     case GAME_STATE_INITIAL_CALM: {
         float inc = dt_sec * (cfg->intensity_gradual_increase > 0 ? cfg->intensity_gradual_increase : 0.0f);
         g->status.unrandom_intensity += inc;
-        float rnd = 1.0f + rand_unit() * (cfg->stimulation_ramp_random_percent / 100.0f);
-        float target = g->status.unrandom_intensity * rnd;
-        target = clampf(target, 0.0f, cfg->max_motor_intensity);
-        g->status.target_intensity = target;
+        g->status.unrandom_intensity = clampf(g->status.unrandom_intensity, 0.0f, cfg->max_motor_intensity);
+        g->status.target_intensity = game_compute_randomized_target_locked(g, now_ms);
 
         if (pressure > cfg->mid_pressure_kpa) {
             g->status.recorded_mid_intensity = g->status.current_intensity;
@@ -401,10 +441,8 @@ static void game_calculate_state_locked(game_engine_t *g, int64_t now_ms)
     case GAME_STATE_SUB_CALM: {
         float inc = dt_sec * (cfg->intensity_gradual_increase > 0 ? cfg->intensity_gradual_increase : 0.0f);
         g->status.unrandom_intensity += inc;
-        float rnd = 1.0f + rand_unit() * (cfg->stimulation_ramp_random_percent / 100.0f);
-        float target = g->status.unrandom_intensity * rnd;
-        target = clampf(target, 0.0f, cfg->max_motor_intensity);
-        g->status.target_intensity = target;
+        g->status.unrandom_intensity = clampf(g->status.unrandom_intensity, 0.0f, cfg->max_motor_intensity);
+        g->status.target_intensity = game_compute_randomized_target_locked(g, now_ms);
 
         if (pressure > cfg->mid_pressure_kpa) {
             g->status.recorded_mid_intensity = g->status.current_intensity;
@@ -476,7 +514,7 @@ static void game_calculate_state_locked(game_engine_t *g, int64_t now_ms)
             if (base_target < 0.0f) {
                 base_target = 0.0f;
             }
-            g->status.unrandom_intensity = base_target;
+            g->status.unrandom_intensity = clampf(base_target, 0.0f, cfg->max_motor_intensity);
             g->status.state = GAME_STATE_SUB_CALM;
             g->status.is_shocking = false;
             g->shock_end_time_ms = 0;
@@ -626,8 +664,10 @@ void game_engine_start(game_engine_t *g, int64_t now_ms)
     g->status.target_intensity = 0.0f;
     g->status.current_intensity = 0.0f;
     g->status.mid_intensity = 0.5f * g->config.max_motor_intensity;
+    g->status.random_factor = 1.0f;
     g->status.last_update_ms = now_ms;
     g->status.last_intensity_update_ms = now_ms;
+    g->status.last_random_update_ms = 0;
     g->status.prev_pressure = 0.0f;
 
     g->status.total_denied_times = 0;

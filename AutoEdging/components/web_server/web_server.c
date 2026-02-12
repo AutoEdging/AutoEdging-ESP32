@@ -273,6 +273,7 @@ static cJSON *game_config_to_json(const game_config_t *cfg)
     cJSON_AddNumberToObject(root, "stimulationRampRateLimit", cfg->stimulation_ramp_rate_limit);
     cJSON_AddNumberToObject(root, "pressureSensitivity", cfg->pressure_sensitivity);
     cJSON_AddNumberToObject(root, "stimulationRampRandomPercent", cfg->stimulation_ramp_random_percent);
+    cJSON_AddNumberToObject(root, "stimulationRampRandomInterval", cfg->stimulation_ramp_random_interval_s);
     cJSON_AddNumberToObject(root, "intensityGradualIncrease", cfg->intensity_gradual_increase);
     cJSON_AddNumberToObject(root, "shockIntensity", cfg->shock_voltage);
     cJSON_AddNumberToObject(root, "midPressure", cfg->mid_pressure_kpa);
@@ -467,6 +468,9 @@ static esp_err_t parse_game_config_body(const char *body,
     }
     if (json_get_number(root, "stimulationRampRandomPercent", &val)) {
         cfg->stimulation_ramp_random_percent = (float)val;
+    }
+    if (json_get_number(root, "stimulationRampRandomInterval", &val)) {
+        cfg->stimulation_ramp_random_interval_s = (float)val;
     }
     if (json_get_number(root, "intensityGradualIncrease", &val)) {
         cfg->intensity_gradual_increase = (float)val;
@@ -830,6 +834,8 @@ static esp_err_t handle_ws(httpd_req_t *req)
     frame.type = HTTPD_WS_TYPE_TEXT;
     esp_err_t ret = httpd_ws_recv_frame(req, &frame, 0);
     if (ret != ESP_OK) {
+        int fd = httpd_req_to_sockfd(req);
+        ws_remove_client(fd);
         return ret;
     }
     if (frame.len > 0) {
@@ -841,6 +847,8 @@ static esp_err_t handle_ws(httpd_req_t *req)
         ret = httpd_ws_recv_frame(req, &frame, frame.len);
         free(buf);
         if (ret != ESP_OK) {
+            int fd = httpd_req_to_sockfd(req);
+            ws_remove_client(fd);
             return ret;
         }
     }
@@ -981,12 +989,6 @@ esp_err_t web_server_start(const web_server_ctx_t *ctx)
         .handler = handle_ws,
         .is_websocket = true,
     };
-    httpd_uri_t ws_uri_post = {
-        .uri = "/ws",
-        .method = HTTP_POST,
-        .handler = handle_ws,
-        .is_websocket = true,
-    };
     httpd_uri_t root_uri = {
         .uri = "/",
         .method = HTTP_GET,
@@ -1011,7 +1013,6 @@ esp_err_t web_server_start(const web_server_ctx_t *ctx)
     httpd_register_uri_handler(s_server, &game_config_post_uri);
     httpd_register_uri_handler(s_server, &game_control_post_uri);
     httpd_register_uri_handler(s_server, &ws_uri);
-    httpd_register_uri_handler(s_server, &ws_uri_post);
     httpd_register_uri_handler(s_server, &root_uri);
     httpd_register_uri_handler(s_server, &app_js_uri);
     httpd_register_uri_handler(s_server, &app_css_uri);
