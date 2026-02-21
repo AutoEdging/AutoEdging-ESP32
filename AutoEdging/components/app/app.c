@@ -118,6 +118,14 @@ static void led_task(void *arg)
     int64_t last_toggle_ms = 0;
 
     while (1) {
+        control_config_t cfg = {0};
+        control_service_get_config(&s_service, &cfg);
+        if (!cfg.status_led_enabled) {
+            status_led_set(0, 0, 0);
+            vTaskDelay(pdMS_TO_TICKS(120));
+            continue;
+        }
+
         led_mode_t next = led_mode_from_status();
         if (next != mode) {
             mode = next;
