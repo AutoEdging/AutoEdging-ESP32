@@ -9,9 +9,16 @@
 <body>
   <div class="container">
     <header class="card header">
-      <div class="title">
-        <div class="label">AutoEdging</div>
-        <div class="subtitle">ESP-IDF Web 控制面板</div>
+      <div class="header-main">
+        <div class="title">
+          <div class="label">AutoEdging</div>
+          <div class="subtitle">ESP-IDF Web 控制面板</div>
+        </div>
+        <nav class="page-nav page-nav--header" aria-label="页面切换">
+          <button type="button" class="tab-btn active" data-page="page-game">寸止游戏</button>
+          <button type="button" class="tab-btn" data-page="page-manual">手动模式</button>
+          <button type="button" class="tab-btn" data-page="page-system">系统设置</button>
+        </nav>
       </div>
       <div class="status">
         <span id="conn" class="badge offline">离线</span>
@@ -21,12 +28,6 @@
         </div>
       </div>
     </header>
-
-    <nav class="card page-nav" aria-label="页面切换">
-      <button type="button" class="tab-btn active" data-page="page-game">寸止游戏</button>
-      <button type="button" class="tab-btn" data-page="page-manual">手动模式</button>
-      <button type="button" class="tab-btn" data-page="page-system">系统设置</button>
-    </nav>
 
     <main id="page-game" class="page is-active">
       <section class="card chart-card">
@@ -44,7 +45,7 @@
         <div class="output-grid">
           <div class="output-item">
             <div class="output-label">DAC</div>
-            <div class="output-value" id="dac">code ---, --.- V</div>
+            <div class="output-value" id="dac">--.- V</div>
           </div>
           <div class="output-item">
             <div class="output-label">跳蛋强度</div>
@@ -63,10 +64,6 @@
           <div class="output-item">
             <div class="output-label">状态</div>
             <div class="output-value" id="game-state">--</div>
-          </div>
-          <div class="output-item">
-            <div class="output-label">运行</div>
-            <div class="output-value" id="game-running">--</div>
           </div>
           <div class="output-item">
             <div class="output-label">强度</div>
@@ -153,37 +150,81 @@
             <label>中期最低强度<button type="button" class="help-btn" data-help-title="中期最低强度" data-help="MIDDLE 状态强度随压力逼近临界时的下限值(默认 5)。越过临界仍会瞬间降为 0。">?</button></label>
             <input id="game-mid-min" type="number" min="0" max="255" step="0.1" />
           </div>
-          <div class="field">
-            <label>跳蛋强度1 最大 (%)<button type="button" class="help-btn" data-help-title="跳蛋强度1 最大" data-help="每路跳蛋的最大输出上限(0..100%)。游戏强度会按比例映射到该上限。">?</button></label>
-            <input id="game-pwm0" type="number" min="0" max="100" step="0.1" />
+          <div class="field dual-slider-field">
+            <label>跳蛋强度1 范围 (%)<button type="button" class="help-btn" data-help-title="跳蛋强度1 范围" data-help="左侧手柄为最低输出，右侧手柄为最高输出。游戏强度会映射到该范围。">?</button></label>
+            <div class="dual-range">
+              <div class="dual-range-track"></div>
+              <div class="dual-range-fill" id="game-pwm0-fill"></div>
+              <input id="game-pwm0-min" class="range-input dual-range-input min" type="range" min="0" max="100" step="0.1" />
+              <input id="game-pwm0" class="range-input dual-range-input max" type="range" min="0" max="100" step="0.1" />
+            </div>
+            <div class="dual-range-values">
+              <label class="dual-range-value-field">最低
+                <input id="game-pwm0-min-value" class="dual-range-value-input" type="number" min="0" max="100" step="0.1" value="0.0" data-range-key="pwm0" data-range-edge="min" />
+                <span class="unit">%</span>
+              </label>
+              <label class="dual-range-value-field">最高
+                <input id="game-pwm0-value" class="dual-range-value-input" type="number" min="0" max="100" step="0.1" value="0.0" data-range-key="pwm0" data-range-edge="max" />
+                <span class="unit">%</span>
+              </label>
+            </div>
           </div>
-          <div class="field">
-            <label>跳蛋强度1 最低 (%)<button type="button" class="help-btn" data-help-title="跳蛋强度1 最低" data-help="当强度>0时的最小输出(0..100%)。用于起振门槛。">?</button></label>
-            <input id="game-pwm0-min" type="number" min="0" max="100" step="0.1" />
+          <div class="field dual-slider-field">
+            <label>跳蛋强度2 范围 (%)<button type="button" class="help-btn" data-help-title="跳蛋强度2 范围" data-help="左侧手柄为最低输出，右侧手柄为最高输出。游戏强度会映射到该范围。">?</button></label>
+            <div class="dual-range">
+              <div class="dual-range-track"></div>
+              <div class="dual-range-fill" id="game-pwm1-fill"></div>
+              <input id="game-pwm1-min" class="range-input dual-range-input min" type="range" min="0" max="100" step="0.1" />
+              <input id="game-pwm1" class="range-input dual-range-input max" type="range" min="0" max="100" step="0.1" />
+            </div>
+            <div class="dual-range-values">
+              <label class="dual-range-value-field">最低
+                <input id="game-pwm1-min-value" class="dual-range-value-input" type="number" min="0" max="100" step="0.1" value="0.0" data-range-key="pwm1" data-range-edge="min" />
+                <span class="unit">%</span>
+              </label>
+              <label class="dual-range-value-field">最高
+                <input id="game-pwm1-value" class="dual-range-value-input" type="number" min="0" max="100" step="0.1" value="0.0" data-range-key="pwm1" data-range-edge="max" />
+                <span class="unit">%</span>
+              </label>
+            </div>
           </div>
-          <div class="field">
-            <label>跳蛋强度2 最大 (%)<button type="button" class="help-btn" data-help-title="跳蛋强度2 最大" data-help="每路跳蛋的最大输出上限(0..100%)。游戏强度会按比例映射到该上限。">?</button></label>
-            <input id="game-pwm1" type="number" min="0" max="100" step="0.1" />
+          <div class="field dual-slider-field">
+            <label>跳蛋强度3 范围 (%)<button type="button" class="help-btn" data-help-title="跳蛋强度3 范围" data-help="左侧手柄为最低输出，右侧手柄为最高输出。游戏强度会映射到该范围。">?</button></label>
+            <div class="dual-range">
+              <div class="dual-range-track"></div>
+              <div class="dual-range-fill" id="game-pwm2-fill"></div>
+              <input id="game-pwm2-min" class="range-input dual-range-input min" type="range" min="0" max="100" step="0.1" />
+              <input id="game-pwm2" class="range-input dual-range-input max" type="range" min="0" max="100" step="0.1" />
+            </div>
+            <div class="dual-range-values">
+              <label class="dual-range-value-field">最低
+                <input id="game-pwm2-min-value" class="dual-range-value-input" type="number" min="0" max="100" step="0.1" value="0.0" data-range-key="pwm2" data-range-edge="min" />
+                <span class="unit">%</span>
+              </label>
+              <label class="dual-range-value-field">最高
+                <input id="game-pwm2-value" class="dual-range-value-input" type="number" min="0" max="100" step="0.1" value="0.0" data-range-key="pwm2" data-range-edge="max" />
+                <span class="unit">%</span>
+              </label>
+            </div>
           </div>
-          <div class="field">
-            <label>跳蛋强度2 最低 (%)<button type="button" class="help-btn" data-help-title="跳蛋强度2 最低" data-help="当强度>0时的最小输出(0..100%)。用于起振门槛。">?</button></label>
-            <input id="game-pwm1-min" type="number" min="0" max="100" step="0.1" />
-          </div>
-          <div class="field">
-            <label>跳蛋强度3 最大 (%)<button type="button" class="help-btn" data-help-title="跳蛋强度3 最大" data-help="每路跳蛋的最大输出上限(0..100%)。游戏强度会按比例映射到该上限。">?</button></label>
-            <input id="game-pwm2" type="number" min="0" max="100" step="0.1" />
-          </div>
-          <div class="field">
-            <label>跳蛋强度3 最低 (%)<button type="button" class="help-btn" data-help-title="跳蛋强度3 最低" data-help="当强度>0时的最小输出(0..100%)。用于起振门槛。">?</button></label>
-            <input id="game-pwm2-min" type="number" min="0" max="100" step="0.1" />
-          </div>
-          <div class="field">
-            <label>跳蛋强度4 最大 (%)<button type="button" class="help-btn" data-help-title="跳蛋强度4 最大" data-help="每路跳蛋的最大输出上限(0..100%)。游戏强度会按比例映射到该上限。">?</button></label>
-            <input id="game-pwm3" type="number" min="0" max="100" step="0.1" />
-          </div>
-          <div class="field">
-            <label>跳蛋强度4 最低 (%)<button type="button" class="help-btn" data-help-title="跳蛋强度4 最低" data-help="当强度>0时的最小输出(0..100%)。用于起振门槛。">?</button></label>
-            <input id="game-pwm3-min" type="number" min="0" max="100" step="0.1" />
+          <div class="field dual-slider-field">
+            <label>跳蛋强度4 范围 (%)<button type="button" class="help-btn" data-help-title="跳蛋强度4 范围" data-help="左侧手柄为最低输出，右侧手柄为最高输出。游戏强度会映射到该范围。">?</button></label>
+            <div class="dual-range">
+              <div class="dual-range-track"></div>
+              <div class="dual-range-fill" id="game-pwm3-fill"></div>
+              <input id="game-pwm3-min" class="range-input dual-range-input min" type="range" min="0" max="100" step="0.1" />
+              <input id="game-pwm3" class="range-input dual-range-input max" type="range" min="0" max="100" step="0.1" />
+            </div>
+            <div class="dual-range-values">
+              <label class="dual-range-value-field">最低
+                <input id="game-pwm3-min-value" class="dual-range-value-input" type="number" min="0" max="100" step="0.1" value="0.0" data-range-key="pwm3" data-range-edge="min" />
+                <span class="unit">%</span>
+              </label>
+              <label class="dual-range-value-field">最高
+                <input id="game-pwm3-value" class="dual-range-value-input" type="number" min="0" max="100" step="0.1" value="0.0" data-range-key="pwm3" data-range-edge="max" />
+                <span class="unit">%</span>
+              </label>
+            </div>
           </div>
         </div>
         <div class="actions">
@@ -242,16 +283,36 @@
           </div>
 
           <div class="field">
-            <label>BLE Swing (0-9)</label>
+            <label>BLE Swing (1-9)</label>
             <div class="inline-control">
-              <input id="cfg-ble-swing" type="number" min="0" max="9" />
+              <select id="cfg-ble-swing">
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+                <option value="6">6</option>
+                <option value="7">7</option>
+                <option value="8">8</option>
+                <option value="9">9</option>
+              </select>
               <button id="btn-ble-swing-stop" type="button" class="btn">一键停止</button>
             </div>
           </div>
           <div class="field">
-            <label>BLE Vibrate (0-9)</label>
+            <label>BLE Vibrate (1-9)</label>
             <div class="inline-control">
-              <input id="cfg-ble-vibrate" type="number" min="0" max="9" />
+              <select id="cfg-ble-vibrate">
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+                <option value="6">6</option>
+                <option value="7">7</option>
+                <option value="8">8</option>
+                <option value="9">9</option>
+              </select>
               <button id="btn-ble-vibrate-stop" type="button" class="btn">一键停止</button>
             </div>
           </div>
@@ -280,6 +341,13 @@
           <div class="field">
             <label>曲线窗口 (秒)</label>
             <input id="cfg-window" type="number" min="30" max="120" />
+          </div>
+          <div class="field">
+            <label>RGB 状态灯</label>
+            <select id="cfg-status-led">
+              <option value="1">开启</option>
+              <option value="0">关闭</option>
+            </select>
           </div>
         </div>
 

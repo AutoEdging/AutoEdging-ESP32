@@ -16,7 +16,7 @@
 extern "C" {
 #endif
 
-#define CONTROL_CONFIG_VERSION 1
+#define CONTROL_CONFIG_VERSION 2
 
 typedef struct {
     float pressure_threshold_kpa;
@@ -28,6 +28,7 @@ typedef struct {
     uint32_t sample_hz;             // sensor sampling rate
     uint32_t ws_hz;                 // websocket push rate
     uint32_t window_sec;            // chart window in seconds
+    bool status_led_enabled;        // RGB status led enable
 } control_config_t;
 
 typedef struct {
@@ -43,6 +44,7 @@ typedef struct {
     uint32_t sample_hz;
     uint32_t ws_hz;
     uint32_t window_sec;
+    bool status_led_enabled;
     int64_t timestamp_ms;
 } control_status_t;
 

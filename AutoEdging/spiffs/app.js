@@ -11,7 +11,6 @@ const el = {
   },
   game: {
     state: document.getElementById('game-state'),
-    running: document.getElementById('game-running'),
     intensity: document.getElementById('game-intensity'),
     target: document.getElementById('game-target'),
     pressure: document.getElementById('game-pressure'),
@@ -82,6 +81,7 @@ const el = {
       sample: document.getElementById('cfg-sample'),
       ws: document.getElementById('cfg-ws'),
       window: document.getElementById('cfg-window'),
+      statusLed: document.getElementById('cfg-status-led'),
     },
     buttons: {
       save: document.getElementById('btn-system-save'),
@@ -100,9 +100,11 @@ let lastPressure = null;
 let gameStatus = {};
 let gameConfig = {};
 let gameRunning = false;
+let manualApplyTimer = null;
 
 const WS_STALE_TIMEOUT_MS = 1000;
 const WS_WATCHDOG_INTERVAL_MS = 200;
+const MANUAL_APPLY_DEBOUNCE_MS = 150;
 
 const GAME_STATE_TEXT = {
   INITIAL_CALM: '乖乖蓄欲期…慢慢涨起来哦',
@@ -131,6 +133,7 @@ const CONTROL_DEFAULTS = {
   pwmPermille: [0, 0, 0, 0],
   bleSwing: 0,
   bleVibrate: 0,
+  statusLedEnabled: true,
 };
 
 let chartYMin = CHART_Y_BASE_MIN;
@@ -297,6 +300,60 @@ function setManualPwmValue(key, value) {
   if (view) view.textContent = `${v.toFixed(1)}%`;
 }
 
+function setBleSelectValue(select, value) {
+  if (!select) return;
+  const v = parseInt(value, 10);
+  if (Number.isFinite(v) && v >= 1 && v <= 9) {
+    select.value = String(v);
+  } else {
+    select.value = '';
+  }
+}
+
+function clampPercent(value) {
+  return Math.max(0, Math.min(100, value));
+}
+
+function updateGamePwmRangeView(key, minValue, maxValue) {
+  const minOut = document.getElementById(`game-${key}-min-value`);
+  const maxOut = document.getElementById(`game-${key}-value`);
+  const fill = document.getElementById(`game-${key}-fill`);
+  if (minOut) minOut.value = minValue.toFixed(1);
+  if (maxOut) maxOut.value = maxValue.toFixed(1);
+  if (fill) {
+    fill.style.left = `${minValue}%`;
+    fill.style.width = `${Math.max(0, maxValue - minValue)}%`;
+  }
+}
+
+function syncGamePwmRange(key, changed = '') {
+  const minInput = el.game.inputs[`${key}Min`];
+  const maxInput = el.game.inputs[key];
+  if (!minInput || !maxInput) return;
+
+  let minValue = clampPercent(parseFloatOr(minInput.value, 0));
+  let maxValue = clampPercent(parseFloatOr(maxInput.value, 0));
+  if (minValue > maxValue) {
+    if (changed === 'min') {
+      maxValue = minValue;
+    } else {
+      minValue = maxValue;
+    }
+  }
+
+  minInput.value = minValue.toFixed(1);
+  maxInput.value = maxValue.toFixed(1);
+  updateGamePwmRangeView(key, minValue, maxValue);
+}
+
+function setGamePwmRangeValue(key, minValue, maxValue) {
+  const minInput = el.game.inputs[`${key}Min`];
+  const maxInput = el.game.inputs[key];
+  if (minInput) minInput.value = clampPercent(minValue).toFixed(1);
+  if (maxInput) maxInput.value = clampPercent(maxValue).toFixed(1);
+  syncGamePwmRange(key);
+}
+
 function setConnection(online) {
   if (online) {
     el.conn.textContent = '在线';
@@ -317,9 +374,8 @@ function updateStatus(data) {
     updatePressureColor(lastPressure);
   }
   if (data.dac) {
-    const code = data.dac.code ?? data.dac_code ?? 0;
     const voltage = data.dac.voltage ?? 0;
-    el.dac.textContent = `code ${code}, ${voltage.toFixed(3)} V`;
+    el.dac.textContent = `${voltage.toFixed(3)} V`;
   }
   if (Array.isArray(data.pwm)) {
     el.pwm.textContent = data.pwm
@@ -336,6 +392,7 @@ function updateConfigForm(cfg) {
   el.system.inputs.sample.value = cfg.sample_hz ?? CONTROL_DEFAULTS.sampleHz;
   el.system.inputs.ws.value = cfg.ws_hz ?? CONTROL_DEFAULTS.wsHz;
   el.system.inputs.window.value = cfg.window_sec ?? CONTROL_DEFAULTS.windowSec;
+  el.system.inputs.statusLed.value = (cfg.status_led_enabled ?? CONTROL_DEFAULTS.statusLedEnabled) ? '1' : '0';
   if (cfg.dac) {
     el.manual.inputs.dacCode.value = cfg.dac.code ?? CONTROL_DEFAULTS.dacCode;
     el.manual.inputs.dacPd.value = cfg.dac.pd_mode ?? CONTROL_DEFAULTS.dacPd;
@@ -349,8 +406,8 @@ function updateConfigForm(cfg) {
     PWM_KEYS.forEach((key, idx) => setManualPwmValue(key, (CONTROL_DEFAULTS.pwmPermille[idx] ?? 0) / 10));
   }
   if (cfg.ble) {
-    el.manual.inputs.bleSwing.value = cfg.ble.swing ?? CONTROL_DEFAULTS.bleSwing;
-    el.manual.inputs.bleVibrate.value = cfg.ble.vibrate ?? CONTROL_DEFAULTS.bleVibrate;
+    setBleSelectValue(el.manual.inputs.bleSwing, cfg.ble.swing ?? CONTROL_DEFAULTS.bleSwing);
+    setBleSelectValue(el.manual.inputs.bleVibrate, cfg.ble.vibrate ?? CONTROL_DEFAULTS.bleVibrate);
   }
   if (typeof cfg.window_sec === 'number') {
     windowSec = cfg.window_sec;
@@ -399,6 +456,7 @@ function collectSystemConfig() {
     sample_hz: parseIntOr(el.system.inputs.sample.value, CONTROL_DEFAULTS.sampleHz),
     ws_hz: parseIntOr(el.system.inputs.ws.value, CONTROL_DEFAULTS.wsHz),
     window_sec: parseIntOr(el.system.inputs.window.value, CONTROL_DEFAULTS.windowSec),
+    status_led_enabled: el.system.inputs.statusLed.value === '1',
   };
 }
 
@@ -415,25 +473,13 @@ function updateGameConfigForm(cfg) {
   el.game.inputs.random.value = cfg.stimulationRampRandomPercent ?? 30;
   el.game.inputs.randomInterval.value = cfg.stimulationRampRandomInterval ?? 1;
   el.game.inputs.increase.value = cfg.intensityGradualIncrease ?? 2;
-  el.game.inputs.shockVoltage.value = cfg.shockIntensity ?? 1.2;
+  el.game.inputs.shockVoltage.value = parseFloatOr(cfg.shockIntensity, 1.2).toFixed(1);
   el.game.inputs.midMin.value = cfg.midMinIntensity ?? 5;
-  if (Array.isArray(cfg.pwmMaxPermille)) {
-    el.game.inputs.pwm0.value = ((cfg.pwmMaxPermille[0] ?? 0) / 10).toFixed(1);
-    el.game.inputs.pwm1.value = ((cfg.pwmMaxPermille[1] ?? 0) / 10).toFixed(1);
-    el.game.inputs.pwm2.value = ((cfg.pwmMaxPermille[2] ?? 0) / 10).toFixed(1);
-    el.game.inputs.pwm3.value = ((cfg.pwmMaxPermille[3] ?? 0) / 10).toFixed(1);
-  }
-  if (Array.isArray(cfg.pwmMinPermille)) {
-    el.game.inputs.pwm0Min.value = ((cfg.pwmMinPermille[0] ?? 0) / 10).toFixed(1);
-    el.game.inputs.pwm1Min.value = ((cfg.pwmMinPermille[1] ?? 0) / 10).toFixed(1);
-    el.game.inputs.pwm2Min.value = ((cfg.pwmMinPermille[2] ?? 0) / 10).toFixed(1);
-    el.game.inputs.pwm3Min.value = ((cfg.pwmMinPermille[3] ?? 0) / 10).toFixed(1);
-  } else {
-    el.game.inputs.pwm0Min.value = 0;
-    el.game.inputs.pwm1Min.value = 0;
-    el.game.inputs.pwm2Min.value = 0;
-    el.game.inputs.pwm3Min.value = 0;
-  }
+  PWM_KEYS.forEach((key, idx) => {
+    const minPermille = Array.isArray(cfg.pwmMinPermille) ? (cfg.pwmMinPermille[idx] ?? 0) : 0;
+    const maxPermille = Array.isArray(cfg.pwmMaxPermille) ? (cfg.pwmMaxPermille[idx] ?? 0) : 0;
+    setGamePwmRangeValue(key, minPermille / 10, maxPermille / 10);
+  });
   updatePressureColor(lastPressure);
   renderChart();
 }
@@ -516,11 +562,14 @@ function updateGameStatus(data) {
     gameConfig = { ...gameConfig, criticalPressure: data.criticalPressure };
   }
   if (el.game.state) {
-    const k = data.state || '';
-    el.game.state.textContent = GAME_STATE_TEXT[k] || k || '--';
-  }
-  if (el.game.running) {
-    el.game.running.textContent = data.running ? (data.paused ? '暂停' : '运行中') : '停止';
+    if (!data.running) {
+      el.game.state.textContent = '停止';
+    } else if (data.paused) {
+      el.game.state.textContent = '暂停';
+    } else {
+      const k = data.state || '';
+      el.game.state.textContent = GAME_STATE_TEXT[k] || k || '--';
+    }
   }
   if (el.game.intensity) {
     const v = typeof data.currentIntensity === 'number' ? data.currentIntensity.toFixed(1) : '--';
@@ -557,8 +606,10 @@ function updateGameStatus(data) {
   renderChart();
 }
 
-async function postManualConfig(save = true) {
-  setManualToast('正在提交...');
+async function postManualConfig(save = false, quiet = false) {
+  if (!quiet) {
+    setManualToast('正在提交...');
+  }
   try {
     const res = await fetch('/api/config', {
       method: 'POST',
@@ -570,11 +621,26 @@ async function postManualConfig(save = true) {
       throw new Error(data.error || '提交失败');
     }
     updateConfigForm(data);
-    setManualToast(save ? '保存成功' : '已应用');
+    if (!quiet) {
+      setManualToast(save ? '保存成功' : '已应用');
+    }
     setSystemToast('');
   } catch (err) {
     setManualToast(err.message, true);
   }
+}
+
+function scheduleManualConfigApply() {
+  if (gameRunning) {
+    return;
+  }
+  if (manualApplyTimer) {
+    clearTimeout(manualApplyTimer);
+  }
+  manualApplyTimer = setTimeout(() => {
+    manualApplyTimer = null;
+    postManualConfig(false, true);
+  }, MANUAL_APPLY_DEBOUNCE_MS);
 }
 
 async function postSystemConfig(save = true) {
@@ -604,9 +670,9 @@ function resetManualConfigToDefaults() {
     const v = (CONTROL_DEFAULTS.pwmPermille[idx] ?? 0) / 10;
     setManualPwmValue(key, v);
   });
-  el.manual.inputs.bleSwing.value = CONTROL_DEFAULTS.bleSwing;
-  el.manual.inputs.bleVibrate.value = CONTROL_DEFAULTS.bleVibrate;
-  postManualConfig(true);
+  setBleSelectValue(el.manual.inputs.bleSwing, CONTROL_DEFAULTS.bleSwing);
+  setBleSelectValue(el.manual.inputs.bleVibrate, CONTROL_DEFAULTS.bleVibrate);
+  postManualConfig(false);
 }
 
 function resetSystemConfigToDefaults() {
@@ -878,12 +944,51 @@ function setupPageTabs() {
   });
 }
 
+function setupGamePwmRangeControls() {
+  PWM_KEYS.forEach((key) => {
+    const minInput = el.game.inputs[`${key}Min`];
+    const maxInput = el.game.inputs[key];
+    const minValueInput = document.getElementById(`game-${key}-min-value`);
+    const maxValueInput = document.getElementById(`game-${key}-value`);
+    if (!minInput || !maxInput) return;
+
+    minInput.addEventListener('input', () => {
+      syncGamePwmRange(key, 'min');
+    });
+    maxInput.addEventListener('input', () => {
+      syncGamePwmRange(key, 'max');
+    });
+    if (minValueInput) {
+      minValueInput.addEventListener('change', () => {
+        minInput.value = minValueInput.value;
+        syncGamePwmRange(key, 'min');
+      });
+    }
+    if (maxValueInput) {
+      maxValueInput.addEventListener('change', () => {
+        maxInput.value = maxValueInput.value;
+        syncGamePwmRange(key, 'max');
+      });
+    }
+    syncGamePwmRange(key);
+  });
+}
+
 function setupManualControls() {
   PWM_KEYS.forEach((key) => {
     const slider = el.manual.inputs[key];
     if (!slider) return;
     slider.addEventListener('input', () => {
       setManualPwmValue(key, slider.value);
+      scheduleManualConfigApply();
+    });
+  });
+
+  ['dacCode', 'dacPd', 'bleSwing', 'bleVibrate'].forEach((key) => {
+    const input = el.manual.inputs[key];
+    if (!input) return;
+    input.addEventListener('change', () => {
+      scheduleManualConfigApply();
     });
   });
 }
@@ -891,12 +996,12 @@ function setupManualControls() {
 el.manual.buttons.save.addEventListener('click', () => postManualConfig(true));
 el.manual.buttons.reset.addEventListener('click', () => resetManualConfigToDefaults());
 el.manual.buttons.bleSwingStop.addEventListener('click', () => {
-  el.manual.inputs.bleSwing.value = 0;
-  postManualConfig(true);
+  setBleSelectValue(el.manual.inputs.bleSwing, 0);
+  postManualConfig(false);
 });
 el.manual.buttons.bleVibrateStop.addEventListener('click', () => {
-  el.manual.inputs.bleVibrate.value = 0;
-  postManualConfig(true);
+  setBleSelectValue(el.manual.inputs.bleVibrate, 0);
+  postManualConfig(false);
 });
 
 el.system.buttons.save.addEventListener('click', () => postSystemConfig(true));
@@ -910,6 +1015,7 @@ el.game.buttons.stop.addEventListener('click', () => postGameControl('stop'));
 el.game.buttons.shock.addEventListener('click', () => postGameControl('shockOnce'));
 
 setupPageTabs();
+setupGamePwmRangeControls();
 setupManualControls();
 setupHelpPopovers();
 

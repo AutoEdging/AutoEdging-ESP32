@@ -50,6 +50,7 @@ void control_config_set_defaults(control_config_t *cfg)
     cfg->sample_hz = 25;
     cfg->ws_hz = 5;
     cfg->window_sec = 60;
+    cfg->status_led_enabled = true;
 }
 
 static esp_err_t validate_range_bool(bool ok, const char *msg, char *err_msg, size_t err_len)
@@ -214,6 +215,7 @@ static void update_status_from_config(control_status_t *st, const control_config
     st->sample_hz = cfg->sample_hz;
     st->ws_hz = cfg->ws_hz;
     st->window_sec = cfg->window_sec;
+    st->status_led_enabled = cfg->status_led_enabled;
 }
 
 esp_err_t control_service_init(control_service_t *svc,

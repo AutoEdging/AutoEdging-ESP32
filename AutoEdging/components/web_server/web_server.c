@@ -187,6 +187,7 @@ static cJSON *config_to_json(const control_config_t *cfg)
     cJSON_AddNumberToObject(root, "sample_hz", cfg->sample_hz);
     cJSON_AddNumberToObject(root, "ws_hz", cfg->ws_hz);
     cJSON_AddNumberToObject(root, "window_sec", cfg->window_sec);
+    cJSON_AddBoolToObject(root, "status_led_enabled", cfg->status_led_enabled);
 
     cJSON *dac = cJSON_CreateObject();
     cJSON_AddNumberToObject(dac, "code", cfg->dac_code);
@@ -221,6 +222,7 @@ static cJSON *status_to_json(const control_status_t *st)
     cJSON_AddNumberToObject(root, "sample_hz", st->sample_hz);
     cJSON_AddNumberToObject(root, "ws_hz", st->ws_hz);
     cJSON_AddNumberToObject(root, "window_sec", st->window_sec);
+    cJSON_AddBoolToObject(root, "status_led_enabled", st->status_led_enabled);
 
     cJSON *dac = cJSON_CreateObject();
     cJSON_AddNumberToObject(dac, "code", st->dac_code);
@@ -376,6 +378,10 @@ static esp_err_t parse_config_body(const char *body,
     }
     if (json_get_number(root, "window_sec", &val)) {
         cfg->window_sec = (uint32_t)val;
+    }
+    bool status_led_enabled = cfg->status_led_enabled;
+    if (json_get_bool(root, "status_led_enabled", &status_led_enabled)) {
+        cfg->status_led_enabled = status_led_enabled;
     }
 
     cJSON *dac = cJSON_GetObjectItem(root, "dac");
