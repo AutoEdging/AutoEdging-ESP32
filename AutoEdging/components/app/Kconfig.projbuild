@@ -20,4 +20,8 @@ config APP_DEBUG_IO
     bool "Enable IO debug logs"
     default n
 
+config APP_MEMORY_LOG_ENABLE
+    bool "Enable periodic memory usage logs"
+    default n
+
 endmenu
