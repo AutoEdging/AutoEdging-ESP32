@@ -66,6 +66,9 @@ static volatile bool s_wifi_failed = false;
 
 static esp_err_t status_led_init(void);
 static void status_led_set(uint8_t r, uint8_t g, uint8_t b);
+#if CONFIG_APP_MEMORY_LOG_ENABLE
+static void memory_log_task(void *arg);
+#endif
 
 typedef enum {
     LED_MODE_WIFI_WAIT = 0,
@@ -430,6 +433,52 @@ static void sensor_task(void *arg)
     }
 }
 
+#if CONFIG_APP_MEMORY_LOG_ENABLE
+static void memory_log_task(void *arg)
+{
+    (void)arg;
+
+    const TickType_t delay_ticks = pdMS_TO_TICKS(10000);
+
+    while (1) {
+        size_t internal_total = heap_caps_get_total_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        size_t internal_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        size_t internal_min_free = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        size_t internal_largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+
+        size_t psram_total = heap_caps_get_total_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        size_t psram_min_free = heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        size_t psram_largest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+        if (psram_total > 0) {
+            ESP_LOGI(TAG,
+                     "mem internal used=%u free=%u min=%u largest=%u total=%u | psram used=%u free=%u min=%u largest=%u total=%u",
+                     (unsigned)(internal_total - internal_free),
+                     (unsigned)internal_free,
+                     (unsigned)internal_min_free,
+                     (unsigned)internal_largest,
+                     (unsigned)internal_total,
+                     (unsigned)(psram_total - psram_free),
+                     (unsigned)psram_free,
+                     (unsigned)psram_min_free,
+                     (unsigned)psram_largest,
+                     (unsigned)psram_total);
+        } else {
+            ESP_LOGI(TAG,
+                     "mem internal used=%u free=%u min=%u largest=%u total=%u | psram unavailable",
+                     (unsigned)(internal_total - internal_free),
+                     (unsigned)internal_free,
+                     (unsigned)internal_min_free,
+                     (unsigned)internal_largest,
+                     (unsigned)internal_total);
+        }
+
+        vTaskDelay(delay_ticks);
+    }
+}
+#endif
+
 void app_start(void)
 {
     ESP_LOGI(TAG, "booting...");
@@ -512,6 +561,9 @@ void app_start(void)
 
     xTaskCreate(sensor_task, "sensor_task", 4096, NULL, 5, NULL);
     xTaskCreate(led_task, "led_task", 2048, NULL, 4, NULL);
+#if CONFIG_APP_MEMORY_LOG_ENABLE
+    xTaskCreate(memory_log_task, "memory_log_task", 3072, NULL, 1, NULL);
+#endif
 
     ESP_LOGI(TAG, "app started");
 }
