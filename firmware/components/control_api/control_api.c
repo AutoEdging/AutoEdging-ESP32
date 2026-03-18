@@ -21,8 +21,6 @@
 #define CONTROL_WINDOW_MAX_SEC     (120)
 #define CONTROL_PWM_MIN            (0)
 #define CONTROL_PWM_MAX            (1000)
-// #define CONTROL_DAC_MIN            (0)
-#define CONTROL_DAC_MAX            (4095)
 // #define CONTROL_BLE_MIN            (0)
 #define CONTROL_BLE_MAX            (10)
 
@@ -39,8 +37,6 @@ void control_config_set_defaults(control_config_t *cfg)
         return;
     }
     cfg->pressure_threshold_kpa = 20.0f;
-    cfg->dac_code = 0;
-    cfg->dac_pd = DAC7571_PD_NORMAL;
     cfg->pwm_permille[0] = 0;
     cfg->pwm_permille[1] = 0;
     cfg->pwm_permille[2] = 0;
@@ -86,12 +82,6 @@ esp_err_t control_config_validate(const control_config_t *cfg, char *err_msg, si
         if (cfg->pwm_permille[i] > CONTROL_PWM_MAX) {
             return validate_range_bool(false, "pwm_permille out of range", err_msg, err_len);
         }
-    }
-    if (cfg->dac_code > CONTROL_DAC_MAX) {
-        return validate_range_bool(false, "dac_code out of range", err_msg, err_len);
-    }
-    if ((int)cfg->dac_pd < 0 || (int)cfg->dac_pd > 3) {
-        return validate_range_bool(false, "dac_pd out of range", err_msg, err_len);
     }
     if (cfg->ble_swing > CONTROL_BLE_MAX) {
         return validate_range_bool(false, "ble_swing out of range", err_msg, err_len);
@@ -156,22 +146,6 @@ static esp_err_t apply_outputs_locked(control_service_t *svc, const control_conf
 {
     esp_err_t err = ESP_OK;
 
-    if (svc->hw.dac) {
-        if (svc->hw.i2c_mutex) {
-            xSemaphoreTake(svc->hw.i2c_mutex, portMAX_DELAY);
-        }
-        err = dac7571_write(svc->hw.dac, cfg->dac_code, cfg->dac_pd);
-        if (svc->hw.i2c_mutex) {
-            xSemaphoreGive(svc->hw.i2c_mutex);
-        }
-        if (err != ESP_OK) {
-            return err;
-        }
-#ifdef CONFIG_APP_DEBUG_IO
-        ESP_LOGI(TAG, "io: dac code=%u pd=%u", cfg->dac_code, (unsigned)cfg->dac_pd);
-#endif
-    }
-
     if (svc->hw.pwm) {
         for (int i = 0; i < 4; i++) {
             err = pwm_ledc_set_permille(svc->hw.pwm, i, cfg->pwm_permille[i]);
@@ -204,9 +178,6 @@ static esp_err_t apply_outputs_locked(control_service_t *svc, const control_conf
 
 static void update_status_from_config(control_status_t *st, const control_config_t *cfg)
 {
-    st->dac_code = cfg->dac_code;
-    st->dac_pd = cfg->dac_pd;
-    st->dac_voltage = (cfg->dac_code / 4095.0f) * 3.3f;
     for (int i = 0; i < 4; i++) {
         st->pwm_permille[i] = cfg->pwm_permille[i];
     }

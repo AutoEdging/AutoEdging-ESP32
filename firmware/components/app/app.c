@@ -21,7 +21,6 @@
 
 #include "bus_i2c.h"
 #include "dev_mcp_h11.h"
-#include "dev_dac7571.h"
 #include "act_pwm_ledc.h"
 #include "ble_belt.h"
 #include "dglab_socket.h"
@@ -51,7 +50,6 @@ static const char *TAG = "app";
 
 static bus_i2c_t s_i2c = {0};
 static mcp_h11_t s_mcp = {0};
-static dac7571_t s_dac = {0};
 static pwm_ledc_t s_pwm = {0};
 static dglab_socket_t s_dglab = {0};
 static control_service_t s_service;
@@ -287,12 +285,6 @@ static esp_err_t app_init_devices(void)
     };
     ESP_RETURN_ON_ERROR(mcp_h11_init(&s_mcp, s_i2c.bus, &mcp_cfg), TAG, "mcp init failed");
 
-    dac7571_config_t dac_cfg = {
-        .i2c_addr_7bit = 0x4D,
-        .scl_speed_hz = APP_I2C_FREQ_HZ,
-    };
-    ESP_RETURN_ON_ERROR(dac7571_init(&s_dac, s_i2c.bus, &dac_cfg), TAG, "dac init failed");
-
     pwm_ledc_config_t pwm_cfg = {
         .timer_cfg = {
             .speed_mode = LEDC_LOW_SPEED_MODE,
@@ -479,8 +471,6 @@ void app_start(void)
         control_config_set_defaults(&cfg);
         control_config_save(&cfg);
     }
-    cfg.dac_code = 0;
-    cfg.dac_pd = DAC7571_PD_NORMAL;
     cfg.ble_swing = 0;
     cfg.ble_vibrate = 0;
     for (int i = 0; i < 4; i++) {
@@ -488,9 +478,7 @@ void app_start(void)
     }
 
     control_service_hw_t hw = {
-        .dac = &s_dac,
         .pwm = &s_pwm,
-        .i2c_mutex = s_i2c_mutex,
     };
     ESP_ERROR_CHECK(control_service_init(&s_service, &hw, &cfg));
 

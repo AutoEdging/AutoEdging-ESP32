@@ -1,7 +1,6 @@
 const el = {
   conn: document.getElementById('conn'),
   pressure: document.getElementById('pressure'),
-  dac: document.getElementById('dac'),
   pwm: document.getElementById('pwm'),
   ble: document.getElementById('ble'),
   dglab: document.getElementById('dglab-status'),
@@ -57,8 +56,6 @@ const el = {
   manual: {
     toast: document.getElementById('manual-toast'),
     inputs: {
-      dacCode: document.getElementById('cfg-dac-code'),
-      dacPd: document.getElementById('cfg-dac-pd'),
       pwm0: document.getElementById('cfg-pwm0'),
       pwm1: document.getElementById('cfg-pwm1'),
       pwm2: document.getElementById('cfg-pwm2'),
@@ -162,8 +159,6 @@ const CONTROL_DEFAULTS = {
   sampleHz: 25,
   wsHz: 5,
   windowSec: 60,
-  dacCode: 0,
-  dacPd: 0,
   pwmPermille: [0, 0, 0, 0],
   bleSwing: 0,
   bleVibrate: 0,
@@ -416,10 +411,6 @@ function updateStatus(data) {
     lastPressure = data.pressure_kpa;
     updatePressureColor(lastPressure);
   }
-  if (data.dac) {
-    const voltage = data.dac.voltage ?? 0;
-    el.dac.textContent = `${voltage.toFixed(3)} V`;
-  }
   if (Array.isArray(data.pwm)) {
     el.pwm.textContent = data.pwm
       .map(v => `${(Number(v) / 10).toFixed(1)}%`)
@@ -439,10 +430,6 @@ function updateConfigForm(cfg) {
   el.system.inputs.ws.value = cfg.ws_hz ?? CONTROL_DEFAULTS.wsHz;
   el.system.inputs.window.value = cfg.window_sec ?? CONTROL_DEFAULTS.windowSec;
   el.system.inputs.statusLed.value = (cfg.status_led_enabled ?? CONTROL_DEFAULTS.statusLedEnabled) ? '1' : '0';
-  if (cfg.dac) {
-    el.manual.inputs.dacCode.value = cfg.dac.code ?? CONTROL_DEFAULTS.dacCode;
-    el.manual.inputs.dacPd.value = cfg.dac.pd_mode ?? CONTROL_DEFAULTS.dacPd;
-  }
   if (Array.isArray(cfg.pwm)) {
     setManualPwmValue('pwm0', (cfg.pwm[0] ?? 0) / 10);
     setManualPwmValue('pwm1', (cfg.pwm[1] ?? 0) / 10);
@@ -576,10 +563,6 @@ function setManualEnabled(enabled) {
 
 function collectManualConfig() {
   return {
-    dac: {
-      code: parseIntOr(el.manual.inputs.dacCode.value, CONTROL_DEFAULTS.dacCode),
-      pd_mode: parseIntOr(el.manual.inputs.dacPd.value, CONTROL_DEFAULTS.dacPd),
-    },
     pwm: [
       Math.round(parseFloatOr(el.manual.inputs.pwm0.value, 0) * 10),
       Math.round(parseFloatOr(el.manual.inputs.pwm1.value, 0) * 10),
@@ -865,8 +848,6 @@ async function postWifiAction(action) {
 }
 
 function resetManualConfigToDefaults() {
-  el.manual.inputs.dacCode.value = CONTROL_DEFAULTS.dacCode;
-  el.manual.inputs.dacPd.value = CONTROL_DEFAULTS.dacPd;
   PWM_KEYS.forEach((key, idx) => {
     const v = (CONTROL_DEFAULTS.pwmPermille[idx] ?? 0) / 10;
     setManualPwmValue(key, v);
@@ -1213,7 +1194,7 @@ function setupManualControls() {
     });
   });
 
-  ['dacCode', 'dacPd', 'bleSwing', 'bleVibrate'].forEach((key) => {
+  ['bleSwing', 'bleVibrate'].forEach((key) => {
     const input = el.manual.inputs[key];
     if (!input) return;
     input.addEventListener('change', () => {

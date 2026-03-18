@@ -186,12 +186,6 @@ static cJSON *config_to_json(const control_config_t *cfg)
     cJSON_AddNumberToObject(root, "window_sec", cfg->window_sec);
     cJSON_AddBoolToObject(root, "status_led_enabled", cfg->status_led_enabled);
 
-    cJSON *dac = cJSON_CreateObject();
-    cJSON_AddNumberToObject(dac, "code", cfg->dac_code);
-    cJSON_AddNumberToObject(dac, "pd_mode", cfg->dac_pd);
-    cJSON_AddNumberToObject(dac, "voltage", (cfg->dac_code / 4095.0f) * 3.3f);
-    cJSON_AddItemToObject(root, "dac", dac);
-
     cJSON *pwm = cJSON_CreateArray();
     for (int i = 0; i < 4; i++) {
         cJSON_AddItemToArray(pwm, cJSON_CreateNumber(cfg->pwm_permille[i]));
@@ -220,12 +214,6 @@ static cJSON *status_to_json(const control_status_t *st)
     cJSON_AddNumberToObject(root, "ws_hz", st->ws_hz);
     cJSON_AddNumberToObject(root, "window_sec", st->window_sec);
     cJSON_AddBoolToObject(root, "status_led_enabled", st->status_led_enabled);
-
-    cJSON *dac = cJSON_CreateObject();
-    cJSON_AddNumberToObject(dac, "code", st->dac_code);
-    cJSON_AddNumberToObject(dac, "pd_mode", st->dac_pd);
-    cJSON_AddNumberToObject(dac, "voltage", st->dac_voltage);
-    cJSON_AddItemToObject(root, "dac", dac);
 
     cJSON *pwm = cJSON_CreateArray();
     for (int i = 0; i < 4; i++) {
@@ -454,21 +442,6 @@ static esp_err_t parse_config_body(const char *body,
     bool status_led_enabled = cfg->status_led_enabled;
     if (json_get_bool(root, "status_led_enabled", &status_led_enabled)) {
         cfg->status_led_enabled = status_led_enabled;
-    }
-
-    cJSON *dac = cJSON_GetObjectItem(root, "dac");
-    if (dac && cJSON_IsObject(dac)) {
-        if (json_get_number(dac, "code", &val)) {
-            cfg->dac_code = (uint16_t)val;
-        } else if (json_get_number(dac, "voltage", &val)) {
-            int code = (int)((val / 3.3f) * 4095.0f + 0.5f);
-            if (code < 0) code = 0;
-            if (code > 4095) code = 4095;
-            cfg->dac_code = (uint16_t)code;
-        }
-        if (json_get_number(dac, "pd_mode", &val)) {
-            cfg->dac_pd = (dac7571_pd_t)((int)val);
-        }
     }
 
     cJSON *pwm = cJSON_GetObjectItem(root, "pwm");
@@ -1191,8 +1164,7 @@ static void ws_push_task(void *arg)
         }
         int len = snprintf(msg, WS_PUSH_MSG_MAX,
                            "{\"ts\":%lld,\"pressure_kpa\":%.3f,\"temp_c\":%.2f,"
-                           "\"sensor_status\":%u,\"dac\":{\"code\":%u,\"pd_mode\":%u,\"voltage\":%.3f},"
-                           "\"pwm\":[%u,%u,%u,%u],\"ble\":{\"swing\":%u,\"vibrate\":%u},"
+                           "\"sensor_status\":%u,\"pwm\":[%u,%u,%u,%u],\"ble\":{\"swing\":%u,\"vibrate\":%u},"
                            "\"dglab\":{\"serverUrl\":\"%s\",\"connectionState\":\"%s\",\"websocketConnected\":%s,"
                            "\"paired\":%s,\"clientId\":\"%s\",\"targetId\":\"%s\",\"qrText\":\"%s\","
                            "\"lastErrorCode\":\"%s\",\"lastErrorText\":\"%s\",\"lastHeartbeatMs\":%lld},"
@@ -1205,9 +1177,6 @@ static void ws_push_task(void *arg)
                            st.pressure_kpa,
                            st.temp_c,
                            st.sensor_status,
-                           st.dac_code,
-                           st.dac_pd,
-                           st.dac_voltage,
                            st.pwm_permille[0], st.pwm_permille[1], st.pwm_permille[2], st.pwm_permille[3],
                            st.ble_swing,
                            st.ble_vibrate,

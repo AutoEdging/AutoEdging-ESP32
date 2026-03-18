@@ -8,7 +8,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
-#include "dev_dac7571.h"
 #include "act_pwm_ledc.h"
 #include "ble_belt.h"
 
@@ -16,12 +15,10 @@
 extern "C" {
 #endif
 
-#define CONTROL_CONFIG_VERSION 2
+#define CONTROL_CONFIG_VERSION 3
 
 typedef struct {
     float pressure_threshold_kpa;
-    uint16_t dac_code;              // 0..4095
-    dac7571_pd_t dac_pd;            // 0..3
     uint16_t pwm_permille[4];       // 0..1000
     uint8_t ble_swing;              // 0..10
     uint8_t ble_vibrate;            // 0..10
@@ -35,9 +32,6 @@ typedef struct {
     float pressure_kpa;
     float temp_c;
     uint8_t sensor_status;
-    uint16_t dac_code;
-    dac7571_pd_t dac_pd;
-    float dac_voltage;
     uint16_t pwm_permille[4];
     uint8_t ble_swing;
     uint8_t ble_vibrate;
@@ -49,9 +43,7 @@ typedef struct {
 } control_status_t;
 
 typedef struct {
-    dac7571_t *dac;
     pwm_ledc_t *pwm;
-    SemaphoreHandle_t i2c_mutex;
 } control_service_hw_t;
 
 typedef struct control_service {

@@ -44,10 +44,6 @@
         <div class="section-title">输出状态</div>
         <div class="output-grid">
           <div class="output-item">
-            <div class="output-label">DAC</div>
-            <div class="output-value" id="dac">--.- V</div>
-          </div>
-          <div class="output-item">
             <div class="output-label">跳蛋强度</div>
             <div class="output-value" id="pwm">-- / -- / -- / --</div>
           </div>
@@ -262,20 +258,6 @@
       <section class="card manual-config">
         <div class="section-title">手动模式</div>
         <div class="form manual-form">
-          <div class="field">
-            <label>DAC Code (0-4095)</label>
-            <input id="cfg-dac-code" type="number" min="0" max="4095" />
-          </div>
-          <div class="field">
-            <label>DAC Power-Down</label>
-            <select id="cfg-dac-pd">
-              <option value="0">Normal</option>
-              <option value="1">1K</option>
-              <option value="2">100K</option>
-              <option value="3">Hi-Z</option>
-            </select>
-          </div>
-
           <div class="field slider-field">
             <label for="cfg-pwm0">跳蛋强度1 (%)</label>
             <div class="slider-row">
