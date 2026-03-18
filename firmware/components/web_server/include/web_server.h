@@ -3,6 +3,7 @@
 #include "esp_err.h"
 
 #include "control_api.h"
+#include "dglab_socket.h"
 #include "game_engine.h"
 #include "telemetry.h"
 
@@ -12,6 +13,7 @@ extern "C" {
 
 typedef struct {
     control_service_t *control;
+    dglab_socket_t *dglab;
     telemetry_t *telemetry;
     game_engine_t *game;
 } web_server_ctx_t;

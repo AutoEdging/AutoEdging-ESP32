@@ -8,15 +8,15 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
-#include "dev_dac7571.h"
 #include "act_pwm_ledc.h"
+#include "dglab_socket.h"
 #include "led_strip.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define GAME_CONFIG_VERSION 5
+#define GAME_CONFIG_VERSION 6
 #define GAME_PRESSURE_HISTORY_LEN 60
 
 typedef enum {
@@ -37,7 +37,10 @@ typedef struct {
     float stimulation_ramp_random_percent;
     float stimulation_ramp_random_interval_s;
     float intensity_gradual_increase;
-    float shock_voltage;
+    char shock_channel;
+    uint8_t shock_strength;
+    uint8_t shock_duration_s;
+    uint8_t shock_waveform_preset;
     float mid_pressure_kpa;
     float mid_min_intensity;
     uint16_t pwm_max_permille[4];
@@ -79,8 +82,8 @@ typedef struct {
 } game_status_t;
 
 typedef struct {
-    dac7571_t *dac;
     pwm_ledc_t *pwm;
+    dglab_socket_t *dglab;
     SemaphoreHandle_t i2c_mutex;
     led_strip_handle_t led;
 } game_engine_hw_t;
@@ -100,7 +103,6 @@ typedef struct {
     uint16_t last_pwm_permille[4];
     uint8_t last_ble_swing;
     uint8_t last_ble_vibrate;
-    uint16_t last_dac_code;
 } game_engine_t;
 
 void game_config_set_defaults(game_config_t *cfg);

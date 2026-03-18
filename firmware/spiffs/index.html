@@ -55,6 +55,10 @@
             <div class="output-label">BLE Belt</div>
             <div class="output-value" id="ble">swing --, vibrate --</div>
           </div>
+          <div class="output-item">
+            <div class="output-label">DG-LAB</div>
+            <div class="output-value" id="dglab-status">--</div>
+          </div>
         </div>
       </section>
 
@@ -143,8 +147,27 @@
             <input id="game-increase" type="number" min="0" max="50" step="0.1" />
           </div>
           <div class="field">
-            <label>电击电压 (V)<button type="button" class="help-btn" data-help-title="电击电压" data-help="使用Type-C线连接到郊狼的按钮配件Type-C口，使用 DAC 输出电压(<=2.1V)。建议 >1V 直接触发外部模块最大强度；<0.5V 视为不电击。">?</button></label>
-            <input id="game-shock-voltage" type="number" min="0" max="2.1" step="0.1" />
+            <label>DG-LAB 通道<button type="button" class="help-btn" data-help-title="DG-LAB 通道" data-help="自动惩罚与手动“电击一次”发送到 DG-LAB 的 A/B 通道。">?</button></label>
+            <select id="game-shock-channel">
+              <option value="A">A</option>
+              <option value="B">B</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>DG-LAB 强度 (0-200)<button type="button" class="help-btn" data-help-title="DG-LAB 强度" data-help="触发惩罚前先把对应通道强度设到该值，然后发送波形。">?</button></label>
+            <input id="game-shock-strength" type="number" min="0" max="200" step="1" />
+          </div>
+          <div class="field">
+            <label>DG-LAB 时长 (秒)<button type="button" class="help-btn" data-help-title="DG-LAB 时长" data-help="每次惩罚波形重复发送的秒数。默认 1 秒。">?</button></label>
+            <input id="game-shock-duration" type="number" min="1" max="10" step="1" />
+          </div>
+          <div class="field">
+            <label>DG-LAB 波形预设<button type="button" class="help-btn" data-help-title="DG-LAB 波形预设" data-help="对应 DG-LAB SOCKET 示例里的 3 组预设波形。">?</button></label>
+            <select id="game-shock-waveform-preset">
+              <option value="1">Preset 1</option>
+              <option value="2">Preset 2</option>
+              <option value="3">Preset 3</option>
+            </select>
           </div>
           <div class="field">
             <label>中期最低强度<button type="button" class="help-btn" data-help-title="中期最低强度" data-help="MIDDLE 状态强度随压力逼近临界时的下限值(默认 5)。越过临界仍会瞬间降为 0。">?</button></label>
@@ -375,9 +398,55 @@
         </div>
         <div id="system-toast" class="toast"></div>
       </section>
+
+      <section class="card dglab-config">
+        <div class="section-title">DG-LAB SOCKET</div>
+        <div class="form">
+          <div class="field">
+            <label>WebSocket 服务地址</label>
+            <input id="cfg-dglab-server-url" type="text" placeholder="ws://host:9999" />
+            <div class="field-hint">填写基础地址，不要带路径和 clientId，例如 `ws://192.168.1.10:9999`。</div>
+          </div>
+          <div class="field">
+            <label>连接状态</label>
+            <div id="dglab-state" class="field-static">--</div>
+          </div>
+          <div class="field">
+            <label>Client ID</label>
+            <div id="dglab-client-id" class="field-static mono">--</div>
+          </div>
+          <div class="field">
+            <label>Target ID</label>
+            <div id="dglab-target-id" class="field-static mono">--</div>
+          </div>
+          <div class="field">
+            <label>最近心跳</label>
+            <div id="dglab-heartbeat" class="field-static">--</div>
+          </div>
+          <div class="field">
+            <label>最近错误</label>
+            <div id="dglab-error" class="field-static mono">--</div>
+          </div>
+          <div class="field">
+            <label>扫码二维码</label>
+            <div id="dglab-qr" class="qr-box"><div class="qr-empty">等待 clientId</div></div>
+          </div>
+          <div class="field">
+            <label>二维码文本</label>
+            <div id="dglab-qr-text" class="field-static mono">--</div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button id="btn-dglab-save" class="btn primary">保存 DG-LAB 设置</button>
+          <button id="btn-dglab-reconnect" class="btn">重新连接</button>
+        </div>
+        <div id="dglab-toast" class="toast"></div>
+      </section>
     </main>
   </div>
 
+  <script src="/qrcode.min.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

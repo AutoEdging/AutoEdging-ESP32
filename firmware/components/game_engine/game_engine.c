@@ -18,10 +18,6 @@
 #define GAME_NVS_NAMESPACE "game"
 #define GAME_NVS_KEY_CFG "cfg"
 
-#define DAC_VREF_VOLTAGE 3.3f
-#define DAC_MAX_CODE 4095u
-#define DAC_MAX_SAFE_VOLTAGE 2.1f
-
 static const char *TAG = "game_engine";
 
 typedef struct {
@@ -43,15 +39,6 @@ static float rand_unit(void)
     return (f - 0.5f) * 2.0f;
 }
 
-static uint16_t dac_code_from_voltage(float v)
-{
-    v = clampf(v, 0.0f, DAC_MAX_SAFE_VOLTAGE);
-    float code = (v / DAC_VREF_VOLTAGE) * (float)DAC_MAX_CODE;
-    if (code < 0.0f) code = 0.0f;
-    if (code > (float)DAC_MAX_CODE) code = (float)DAC_MAX_CODE;
-    return (uint16_t)(code + 0.5f);
-}
-
 void game_config_set_defaults(game_config_t *cfg)
 {
     if (!cfg) {
@@ -66,7 +53,10 @@ void game_config_set_defaults(game_config_t *cfg)
     cfg->stimulation_ramp_random_percent = 30.0f;
     cfg->stimulation_ramp_random_interval_s = 1.0f;
     cfg->intensity_gradual_increase = 2.0f;
-    cfg->shock_voltage = 1.2f;
+    cfg->shock_channel = 'A';
+    cfg->shock_strength = 20;
+    cfg->shock_duration_s = 5;
+    cfg->shock_waveform_preset = 1;
     cfg->mid_pressure_kpa = 19.0f;
     cfg->mid_min_intensity = 5.0f;
     for (int i = 0; i < 4; i++) {
@@ -121,8 +111,17 @@ esp_err_t game_config_validate(const game_config_t *cfg, char *err_msg, size_t e
     if (cfg->intensity_gradual_increase < 0.0f || cfg->intensity_gradual_increase > 50.0f) {
         return validate_range_bool(false, "intensityGradualIncrease out of range", err_msg, err_len);
     }
-    if (cfg->shock_voltage < 0.0f || cfg->shock_voltage > DAC_MAX_SAFE_VOLTAGE) {
-        return validate_range_bool(false, "shockVoltage out of range", err_msg, err_len);
+    if (cfg->shock_channel != 'A' && cfg->shock_channel != 'B') {
+        return validate_range_bool(false, "shockChannel out of range", err_msg, err_len);
+    }
+    if (cfg->shock_strength > 200) {
+        return validate_range_bool(false, "shockStrength out of range", err_msg, err_len);
+    }
+    if (cfg->shock_duration_s < 1 || cfg->shock_duration_s > 10) {
+        return validate_range_bool(false, "shockDuration out of range", err_msg, err_len);
+    }
+    if (cfg->shock_waveform_preset < 1 || cfg->shock_waveform_preset > 3) {
+        return validate_range_bool(false, "shockWaveformPreset out of range", err_msg, err_len);
     }
     if (cfg->mid_min_intensity < 0.0f || cfg->mid_min_intensity > cfg->max_motor_intensity) {
         return validate_range_bool(false, "midMinIntensity out of range", err_msg, err_len);
@@ -191,28 +190,6 @@ esp_err_t game_config_save(const game_config_t *cfg)
     return err;
 }
 
-static esp_err_t game_write_dac(game_engine_t *g, uint16_t code)
-{
-    if (!g || !g->hw.dac) {
-        return ESP_OK;
-    }
-    esp_err_t err;
-    if (g->hw.i2c_mutex) {
-        xSemaphoreTake(g->hw.i2c_mutex, portMAX_DELAY);
-    }
-    err = dac7571_write(g->hw.dac, code, DAC7571_PD_NORMAL);
-    if (g->hw.i2c_mutex) {
-        xSemaphoreGive(g->hw.i2c_mutex);
-    }
-#ifdef CONFIG_APP_DEBUG_IO
-    if (err == ESP_OK) {
-        float voltage = (code / (float)DAC_MAX_CODE) * DAC_VREF_VOLTAGE;
-        ESP_LOGI(TAG, "io: dac code=%u voltage=%.3fV", code, (double)voltage);
-    }
-#endif
-    return err;
-}
-
 static void game_apply_outputs_off(game_engine_t *g, bool force)
 {
     if (!g) {
@@ -233,10 +210,6 @@ static void game_apply_outputs_off(game_engine_t *g, bool force)
     if (force || g->last_ble_vibrate != 0) {
         ble_belt_send_vibrate(0);
         g->last_ble_vibrate = 0;
-    }
-    if (force || g->last_dac_code != 0) {
-        game_write_dac(g, 0);
-        g->last_dac_code = 0;
     }
 }
 
@@ -272,10 +245,28 @@ static void game_trigger_shock_locked(game_engine_t *g, bool force, int64_t now_
     if (!force && g->status.is_shocking) {
         return;
     }
+
+    dglab_punishment_t punishment = {
+        .shock_channel = g->config.shock_channel,
+        .shock_strength = g->config.shock_strength,
+        .shock_duration_s = g->config.shock_duration_s,
+        .shock_waveform_preset = g->config.shock_waveform_preset,
+    };
+    esp_err_t err = dglab_socket_send_punishment(g->hw.dglab, &punishment);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "DG-LAB shock failed: %s", esp_err_to_name(err));
+        return;
+    }
+
     g->status.is_shocking = true;
     g->status.last_shock_time_ms = now_ms;
     g->status.shock_count += 1;
-    ESP_LOGW(TAG, "shock triggered: %.2fV", g->config.shock_voltage);
+    g->shock_end_time_ms = now_ms + ((int64_t)g->config.shock_duration_s * 1000);
+    ESP_LOGW(TAG, "shock triggered: channel=%c strength=%u preset=%u duration=%us",
+             g->config.shock_channel,
+             g->config.shock_strength,
+             g->config.shock_waveform_preset,
+             g->config.shock_duration_s);
 }
 
 static void game_update_shock_locked(game_engine_t *g, int64_t now_ms)
@@ -356,14 +347,6 @@ static void game_apply_outputs_locked(game_engine_t *g)
 #endif
     }
 
-    uint16_t target_dac = 0;
-    if (g->status.is_shocking) {
-        target_dac = dac_code_from_voltage(g->config.shock_voltage);
-    }
-    if (target_dac != g->last_dac_code) {
-        game_write_dac(g, target_dac);
-        g->last_dac_code = target_dac;
-    }
 }
 
 static float game_compute_randomized_target_locked(game_engine_t *g, int64_t now_ms)
@@ -488,7 +471,6 @@ static void game_calculate_state_locked(game_engine_t *g, int64_t now_ms)
             if (!g->status.is_shocking) {
                 game_trigger_shock_locked(g, false, now_ms);
             }
-            g->shock_end_time_ms = 0;
             ESP_LOGI(TAG, "enter delay");
         }
         break;
@@ -586,7 +568,6 @@ esp_err_t game_engine_init(game_engine_t *g,
     g->status.min_pressure = 999.0f;
     g->last_ble_swing = 0;
     g->last_ble_vibrate = 0;
-    g->last_dac_code = 0;
     for (int i = 0; i < 4; i++) {
         g->last_pwm_permille[i] = 0;
     }
@@ -678,7 +659,6 @@ void game_engine_start(game_engine_t *g, int64_t now_ms)
     g->status.last_shock_time_ms = 0;
     g->status.shock_count = 0;
     g->shock_end_time_ms = 0;
-    g->shock_end_time_ms = 0;
 
     g->status.max_pressure = 0.0f;
     g->status.min_pressure = 999.0f;
@@ -729,7 +709,6 @@ void game_engine_trigger_shock(game_engine_t *g, bool force)
     if (force) {
         int64_t now_ms = esp_timer_get_time() / 1000;
         game_trigger_shock_locked(g, true, now_ms);
-        g->shock_end_time_ms = now_ms + SHOCK_ONCE_MS;
     }
     game_apply_outputs_locked(g);
     xSemaphoreGive(g->lock);

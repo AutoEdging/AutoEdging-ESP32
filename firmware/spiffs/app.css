@@ -293,7 +293,7 @@ body {
 
 .outputs .output-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 8px;
 }
 
@@ -398,6 +398,36 @@ body {
   font-size: 11px;
   color: var(--muted);
   line-height: 1.45;
+}
+
+.mono {
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  word-break: break-all;
+}
+
+.qr-box {
+  min-height: 168px;
+  border-radius: 14px;
+  border: 1px dashed rgba(0, 210, 255, 0.35);
+  background: rgba(10, 20, 30, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+}
+
+.qr-box img,
+.qr-box canvas {
+  max-width: 100%;
+  height: auto;
+  background: #fff;
+  padding: 8px;
+  border-radius: 10px;
+}
+
+.qr-empty {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .field input[type="range"] {

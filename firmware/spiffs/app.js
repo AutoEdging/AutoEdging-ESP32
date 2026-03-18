@@ -4,6 +4,7 @@ const el = {
   dac: document.getElementById('dac'),
   pwm: document.getElementById('pwm'),
   ble: document.getElementById('ble'),
+  dglab: document.getElementById('dglab-status'),
   chartMeta: document.getElementById('chart-meta'),
   nav: {
     tabs: Array.from(document.querySelectorAll('.tab-btn')),
@@ -30,7 +31,10 @@ const el = {
       random: document.getElementById('game-random'),
       randomInterval: document.getElementById('game-random-interval'),
       increase: document.getElementById('game-increase'),
-      shockVoltage: document.getElementById('game-shock-voltage'),
+      shockChannel: document.getElementById('game-shock-channel'),
+      shockStrength: document.getElementById('game-shock-strength'),
+      shockDuration: document.getElementById('game-shock-duration'),
+      shockWaveformPreset: document.getElementById('game-shock-waveform-preset'),
       midMin: document.getElementById('game-mid-min'),
       pwm0: document.getElementById('game-pwm0'),
       pwm1: document.getElementById('game-pwm1'),
@@ -94,6 +98,25 @@ const el = {
       reset: document.getElementById('btn-system-reset'),
       reprovision: document.getElementById('btn-system-reprovision'),
     },
+    dglab: {
+      inputs: {
+        serverUrl: document.getElementById('cfg-dglab-server-url'),
+      },
+      status: {
+        state: document.getElementById('dglab-state'),
+        clientId: document.getElementById('dglab-client-id'),
+        targetId: document.getElementById('dglab-target-id'),
+        heartbeat: document.getElementById('dglab-heartbeat'),
+        error: document.getElementById('dglab-error'),
+        qrText: document.getElementById('dglab-qr-text'),
+      },
+      qr: document.getElementById('dglab-qr'),
+      buttons: {
+        save: document.getElementById('btn-dglab-save'),
+        reconnect: document.getElementById('btn-dglab-reconnect'),
+      },
+      toast: document.getElementById('dglab-toast'),
+    },
   },
 };
 
@@ -106,8 +129,12 @@ let wsLastMessageMs = 0;
 let lastPressure = null;
 let gameStatus = {};
 let gameConfig = {};
+let dglabStatus = {};
 let gameRunning = false;
 let manualApplyTimer = null;
+let dglabQr = null;
+let dglabLastHeartbeatValue = 0;
+let dglabLastHeartbeatSeenAt = 0;
 
 const WS_STALE_TIMEOUT_MS = 1000;
 const WS_WATCHDOG_INTERVAL_MS = 200;
@@ -401,6 +428,9 @@ function updateStatus(data) {
   if (data.ble) {
     el.ble.textContent = `swing ${data.ble.swing}, vibrate ${data.ble.vibrate}`;
   }
+  if (data.dglab) {
+    updateDglabStatus(data.dglab);
+  }
 }
 
 function updateConfigForm(cfg) {
@@ -453,6 +483,88 @@ function updateWifiStatus(data) {
   }
 }
 
+function setDglabToast(msg, isError = false) {
+  if (!el.system.dglab.toast) return;
+  el.system.dglab.toast.textContent = msg || '';
+  el.system.dglab.toast.classList.toggle('error', !!isError);
+}
+
+function initDglabQr() {
+  if (!window.QRCode || !el.system.dglab.qr || dglabQr) {
+    return;
+  }
+  dglabQr = new QRCode(el.system.dglab.qr, '');
+}
+
+function renderDglabQr(text) {
+  if (!el.system.dglab.qr) return;
+  initDglabQr();
+  if (!dglabQr || typeof dglabQr.clear !== 'function') {
+    el.system.dglab.qr.textContent = text ? '二维码库未加载' : '等待连接';
+    return;
+  }
+  dglabQr.clear();
+  if (text) {
+    dglabQr.makeCode(text);
+  } else {
+    el.system.dglab.qr.innerHTML = '<div class="qr-empty">等待 clientId</div>';
+  }
+}
+
+function formatHeartbeat(ts) {
+  if (!Number.isFinite(ts) || ts <= 0) return '--';
+  if (ts !== dglabLastHeartbeatValue) {
+    dglabLastHeartbeatValue = ts;
+    dglabLastHeartbeatSeenAt = Date.now();
+  }
+  if (!dglabLastHeartbeatSeenAt) {
+    return '已收到';
+  }
+  const delta = Math.max(0, Math.round((Date.now() - dglabLastHeartbeatSeenAt) / 1000));
+  return `${delta}s 前`;
+}
+
+function updateDglabConfig(cfg) {
+  if (!cfg) return;
+  if (el.system.dglab.inputs.serverUrl) {
+    el.system.dglab.inputs.serverUrl.value = cfg.serverUrl || '';
+  }
+}
+
+function updateDglabStatus(data) {
+  if (!data) return;
+  dglabStatus = data;
+  if (el.dglab) {
+    if (data.paired) {
+      const target = data.targetId ? data.targetId.slice(0, 8) : '--';
+      el.dglab.textContent = `已配对 ${target}`;
+    } else {
+      el.dglab.textContent = data.connectionState || 'disabled';
+    }
+  }
+  if (el.system.dglab.status.state) {
+    el.system.dglab.status.state.textContent = data.connectionState || '--';
+  }
+  if (el.system.dglab.status.clientId) {
+    el.system.dglab.status.clientId.textContent = data.clientId || '--';
+  }
+  if (el.system.dglab.status.targetId) {
+    el.system.dglab.status.targetId.textContent = data.targetId || '--';
+  }
+  if (el.system.dglab.status.heartbeat) {
+    el.system.dglab.status.heartbeat.textContent = formatHeartbeat(data.lastHeartbeatMs);
+  }
+  if (el.system.dglab.status.error) {
+    const code = data.lastErrorCode || '';
+    const text = data.lastErrorText || '';
+    el.system.dglab.status.error.textContent = code || text ? `${code} ${text}`.trim() : '--';
+  }
+  if (el.system.dglab.status.qrText) {
+    el.system.dglab.status.qrText.textContent = data.qrText || '--';
+  }
+  renderDglabQr(data.qrText || '');
+}
+
 function setManualEnabled(enabled) {
   Object.values(el.manual.inputs).forEach((input) => {
     if (input) input.disabled = !enabled;
@@ -490,6 +602,12 @@ function collectSystemConfig() {
   };
 }
 
+function collectDglabConfig() {
+  return {
+    serverUrl: el.system.dglab.inputs.serverUrl?.value?.trim() || '',
+  };
+}
+
 function updateGameConfigForm(cfg) {
   if (!cfg) return;
   gameConfig = cfg;
@@ -503,7 +621,18 @@ function updateGameConfigForm(cfg) {
   el.game.inputs.random.value = cfg.stimulationRampRandomPercent ?? 30;
   el.game.inputs.randomInterval.value = cfg.stimulationRampRandomInterval ?? 1;
   el.game.inputs.increase.value = cfg.intensityGradualIncrease ?? 2;
-  el.game.inputs.shockVoltage.value = parseFloatOr(cfg.shockIntensity, 1.2).toFixed(1);
+  if (el.game.inputs.shockChannel) {
+    el.game.inputs.shockChannel.value = cfg.shockChannel || 'A';
+  }
+  if (el.game.inputs.shockStrength) {
+    el.game.inputs.shockStrength.value = cfg.shockStrength ?? 100;
+  }
+  if (el.game.inputs.shockDuration) {
+    el.game.inputs.shockDuration.value = cfg.shockDuration ?? 1;
+  }
+  if (el.game.inputs.shockWaveformPreset) {
+    el.game.inputs.shockWaveformPreset.value = cfg.shockWaveformPreset ?? 1;
+  }
   el.game.inputs.midMin.value = cfg.midMinIntensity ?? 5;
   PWM_KEYS.forEach((key, idx) => {
     const minPermille = Array.isArray(cfg.pwmMinPermille) ? (cfg.pwmMinPermille[idx] ?? 0) : 0;
@@ -526,7 +655,10 @@ function collectGameConfig() {
     stimulationRampRandomPercent: parseFloat(el.game.inputs.random.value),
     stimulationRampRandomInterval: parseFloat(el.game.inputs.randomInterval.value),
     intensityGradualIncrease: parseFloat(el.game.inputs.increase.value),
-    shockIntensity: parseFloat(el.game.inputs.shockVoltage.value),
+    shockChannel: el.game.inputs.shockChannel.value || 'A',
+    shockStrength: parseIntOr(el.game.inputs.shockStrength.value, 100),
+    shockDuration: parseIntOr(el.game.inputs.shockDuration.value, 1),
+    shockWaveformPreset: parseIntOr(el.game.inputs.shockWaveformPreset.value, 1),
     midMinIntensity: parseFloat(el.game.inputs.midMin.value),
     pwmMaxPermille: [
       Math.round(parseFloat(el.game.inputs.pwm0.value || '0') * 10),
@@ -690,6 +822,26 @@ async function postSystemConfig(save = true) {
     setManualToast('');
   } catch (err) {
     setSystemToast(err.message, true);
+  }
+}
+
+async function postDglabConfig(save = true, reconnect = false) {
+  setDglabToast(reconnect ? '正在重连...' : '正在提交...');
+  try {
+    const res = await fetch('/api/dglab/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...collectDglabConfig(), save, reconnect }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || '提交失败');
+    }
+    updateDglabConfig({ serverUrl: data.serverUrl || collectDglabConfig().serverUrl });
+    updateDglabStatus(data);
+    setDglabToast(reconnect ? '已重连' : '保存成功');
+  } catch (err) {
+    setDglabToast(err.message, true);
   }
 }
 
@@ -866,6 +1018,9 @@ function connectWs() {
     try {
       const data = JSON.parse(event.data);
       updateStatus(data);
+      if (data.dglab) {
+        updateDglabStatus(data.dglab);
+      }
       if (data.game) {
         updateGameStatus(data.game);
       }
@@ -881,12 +1036,14 @@ function connectWs() {
 
 async function loadInitial() {
   try {
-    const [cfgRes, stRes, gameCfgRes, gameStRes, wifiRes] = await Promise.all([
+    const [cfgRes, stRes, gameCfgRes, gameStRes, wifiRes, dglabCfgRes, dglabStRes] = await Promise.all([
       fetch('/api/config'),
       fetch('/api/status'),
       fetch('/api/game/config'),
       fetch('/api/game/status'),
       fetch('/api/system/wifi'),
+      fetch('/api/dglab/config'),
+      fetch('/api/dglab/status'),
     ]);
     const cfg = await cfgRes.json();
     updateConfigForm(cfg);
@@ -898,10 +1055,15 @@ async function loadInitial() {
     updateGameStatus(gst);
     const wifi = await wifiRes.json();
     updateWifiStatus(wifi);
+    const dglabCfg = await dglabCfgRes.json();
+    updateDglabConfig(dglabCfg);
+    const dglabSt = await dglabStRes.json();
+    updateDglabStatus(dglabSt);
   } catch (err) {
     setGameToast('加载配置失败', true);
     setManualToast('加载配置失败', true);
     setSystemToast('加载配置失败', true);
+    setDglabToast('加载配置失败', true);
   }
 }
 
@@ -1080,6 +1242,8 @@ el.system.buttons.reprovision.addEventListener('click', () => {
   }
   postWifiAction('reprovision_reboot');
 });
+el.system.dglab.buttons.save.addEventListener('click', () => postDglabConfig(true, false));
+el.system.dglab.buttons.reconnect.addEventListener('click', () => postDglabConfig(true, true));
 
 el.game.buttons.save.addEventListener('click', () => postGameConfig(true, false));
 el.game.buttons.reset.addEventListener('click', () => postGameConfig(true, true));
@@ -1092,6 +1256,7 @@ setupPageTabs();
 setupGamePwmRangeControls();
 setupManualControls();
 setupHelpPopovers();
+initDglabQr();
 
 window.addEventListener('resize', () => {
   if (document.getElementById('page-game').classList.contains('is-active')) {

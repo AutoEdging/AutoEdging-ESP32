@@ -7,6 +7,7 @@
 
 #include "esp_log.h"
 #include "esp_http_server.h"
+#include "esp_heap_caps.h"
 #include "cJSON.h"
 #include "esp_timer.h"
 
@@ -19,6 +20,7 @@ static const char *TAG = "web_server";
 
 #define WS_MAX_CLIENTS 4
 #define MAX_POST_BODY  2048
+#define WS_PUSH_MSG_MAX 1536
 
 static httpd_handle_t s_server = NULL;
 static web_server_ctx_t s_ctx = {0};
@@ -68,12 +70,6 @@ static void apply_game_outputs_to_status(control_status_t *st, const game_status
         st->ble_swing = 0;
     }
     st->ble_vibrate = (ratio > 0.0f) ? 3 : 0;
-
-    float voltage = gst->is_shocking ? cfg->shock_voltage : 0.0f;
-    voltage = clampf(voltage, 0.0f, 2.1f);
-    uint16_t code = (uint16_t)((voltage / 3.3f) * 4095.0f + 0.5f);
-    st->dac_code = code;
-    st->dac_voltage = voltage;
 }
 
 static void ws_clients_init(void)
@@ -310,7 +306,11 @@ static cJSON *game_config_to_json(const game_config_t *cfg)
     cJSON_AddNumberToObject(root, "stimulationRampRandomPercent", cfg->stimulation_ramp_random_percent);
     cJSON_AddNumberToObject(root, "stimulationRampRandomInterval", cfg->stimulation_ramp_random_interval_s);
     cJSON_AddNumberToObject(root, "intensityGradualIncrease", cfg->intensity_gradual_increase);
-    cJSON_AddNumberToObject(root, "shockIntensity", cfg->shock_voltage);
+    char shock_channel[2] = {cfg->shock_channel, '\0'};
+    cJSON_AddStringToObject(root, "shockChannel", shock_channel);
+    cJSON_AddNumberToObject(root, "shockStrength", cfg->shock_strength);
+    cJSON_AddNumberToObject(root, "shockDuration", cfg->shock_duration_s);
+    cJSON_AddNumberToObject(root, "shockWaveformPreset", cfg->shock_waveform_preset);
     cJSON_AddNumberToObject(root, "midPressure", cfg->mid_pressure_kpa);
     cJSON_AddNumberToObject(root, "midMinIntensity", cfg->mid_min_intensity);
 
@@ -354,6 +354,35 @@ static cJSON *game_status_to_json(const game_status_t *st)
     return root;
 }
 
+static cJSON *dglab_config_to_json(const dglab_config_t *cfg)
+{
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        return NULL;
+    }
+    cJSON_AddStringToObject(root, "serverUrl", cfg->server_url);
+    return root;
+}
+
+static cJSON *dglab_status_to_json(const dglab_status_t *st)
+{
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        return NULL;
+    }
+    cJSON_AddStringToObject(root, "serverUrl", st->server_url);
+    cJSON_AddStringToObject(root, "connectionState", dglab_connection_state_to_string(st->connection_state));
+    cJSON_AddBoolToObject(root, "websocketConnected", st->websocket_connected);
+    cJSON_AddBoolToObject(root, "paired", st->paired);
+    cJSON_AddStringToObject(root, "clientId", st->client_id);
+    cJSON_AddStringToObject(root, "targetId", st->target_id);
+    cJSON_AddStringToObject(root, "qrText", st->qr_text);
+    cJSON_AddStringToObject(root, "lastErrorCode", st->last_error_code);
+    cJSON_AddStringToObject(root, "lastErrorText", st->last_error_text);
+    cJSON_AddNumberToObject(root, "lastHeartbeatMs", (double)st->last_heartbeat_ms);
+    return root;
+}
+
 static bool json_get_number(cJSON *obj, const char *name, double *out)
 {
     cJSON *item = cJSON_GetObjectItem(obj, name);
@@ -370,6 +399,16 @@ static bool json_get_bool(cJSON *obj, const char *name, bool *out)
     if (item && cJSON_IsBool(item)) {
         *out = cJSON_IsTrue(item);
         return true;
+    }
+    return false;
+}
+
+static bool json_get_string(cJSON *obj, const char *name, const char **out)
+{
+    cJSON *item = cJSON_GetObjectItem(obj, name);
+    if (item && cJSON_IsString(item)) {
+        *out = cJSON_GetStringValue(item);
+        return *out != NULL;
     }
     return false;
 }
@@ -514,8 +553,18 @@ static esp_err_t parse_game_config_body(const char *body,
     if (json_get_number(root, "intensityGradualIncrease", &val)) {
         cfg->intensity_gradual_increase = (float)val;
     }
-    if (json_get_number(root, "shockIntensity", &val)) {
-        cfg->shock_voltage = (float)val;
+    const char *str_val = NULL;
+    if (json_get_string(root, "shockChannel", &str_val) && str_val && (str_val[0] == 'A' || str_val[0] == 'B')) {
+        cfg->shock_channel = str_val[0];
+    }
+    if (json_get_number(root, "shockStrength", &val)) {
+        cfg->shock_strength = (uint8_t)val;
+    }
+    if (json_get_number(root, "shockDuration", &val)) {
+        cfg->shock_duration_s = (uint8_t)val;
+    }
+    if (json_get_number(root, "shockWaveformPreset", &val)) {
+        cfg->shock_waveform_preset = (uint8_t)val;
     }
     if (json_get_number(root, "midPressure", &val)) {
         cfg->mid_pressure_kpa = (float)val;
@@ -552,6 +601,35 @@ static esp_err_t parse_game_config_body(const char *body,
 
     esp_err_t err = game_config_validate(cfg, err_msg, err_len);
     return err;
+}
+
+static esp_err_t parse_dglab_config_body(const char *body,
+                                         dglab_config_t *cfg,
+                                         bool *save,
+                                         bool *reconnect,
+                                         char *err_msg,
+                                         size_t err_len)
+{
+    cJSON *root = cJSON_Parse(body);
+    if (!root) {
+        snprintf(err_msg, err_len, "invalid JSON");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    bool save_local = true;
+    bool reconnect_local = false;
+    json_get_bool(root, "save", &save_local);
+    json_get_bool(root, "reconnect", &reconnect_local);
+
+    const char *server_url = NULL;
+    if (json_get_string(root, "serverUrl", &server_url) && server_url) {
+        snprintf(cfg->server_url, sizeof(cfg->server_url), "%s", server_url);
+    }
+
+    *save = save_local;
+    *reconnect = reconnect_local;
+    cJSON_Delete(root);
+    return dglab_config_validate(cfg, err_msg, err_len);
 }
 
 static esp_err_t handle_get_status(httpd_req_t *req)
@@ -699,6 +777,38 @@ static esp_err_t handle_get_game_config(httpd_req_t *req)
     return err;
 }
 
+static esp_err_t handle_get_dglab_config(httpd_req_t *req)
+{
+    if (!s_ctx.dglab) {
+        return send_error(req, "500 Internal Server Error", "dglab not ready");
+    }
+    dglab_config_t cfg = {0};
+    dglab_socket_get_config(s_ctx.dglab, &cfg);
+    cJSON *root = dglab_config_to_json(&cfg);
+    if (!root) {
+        return send_error(req, "500 Internal Server Error", "json alloc failed");
+    }
+    esp_err_t err = send_json(req, root);
+    cJSON_Delete(root);
+    return err;
+}
+
+static esp_err_t handle_get_dglab_status(httpd_req_t *req)
+{
+    if (!s_ctx.dglab) {
+        return send_error(req, "500 Internal Server Error", "dglab not ready");
+    }
+    dglab_status_t st = {0};
+    dglab_socket_get_status(s_ctx.dglab, &st);
+    cJSON *root = dglab_status_to_json(&st);
+    if (!root) {
+        return send_error(req, "500 Internal Server Error", "json alloc failed");
+    }
+    esp_err_t err = send_json(req, root);
+    cJSON_Delete(root);
+    return err;
+}
+
 static esp_err_t handle_post_game_config(httpd_req_t *req)
 {
     if (!s_ctx.game) {
@@ -752,6 +862,70 @@ static esp_err_t handle_post_game_config(httpd_req_t *req)
     }
 
     cJSON *root = game_config_to_json(&cfg);
+    if (!root) {
+        return send_error(req, "500 Internal Server Error", "json alloc failed");
+    }
+    err = send_json(req, root);
+    cJSON_Delete(root);
+    return err;
+}
+
+static esp_err_t handle_post_dglab_config(httpd_req_t *req)
+{
+    if (!s_ctx.dglab) {
+        return send_error(req, "500 Internal Server Error", "dglab not ready");
+    }
+    if (req->content_len <= 0 || req->content_len > MAX_POST_BODY) {
+        return send_error(req, "400 Bad Request", "invalid content length");
+    }
+
+    char *buf = calloc(1, req->content_len + 1);
+    if (!buf) {
+        return send_error(req, "500 Internal Server Error", "oom");
+    }
+
+    int received = 0;
+    while (received < req->content_len) {
+        int ret = httpd_req_recv(req, buf + received, req->content_len - received);
+        if (ret <= 0) {
+            free(buf);
+            return send_error(req, "400 Bad Request", "recv failed");
+        }
+        received += ret;
+    }
+
+    dglab_config_t cfg = {0};
+    dglab_socket_get_config(s_ctx.dglab, &cfg);
+
+    bool save = true;
+    bool reconnect = false;
+    char err_msg[96] = {0};
+    esp_err_t err = parse_dglab_config_body(buf, &cfg, &save, &reconnect, err_msg, sizeof(err_msg));
+    free(buf);
+    if (err != ESP_OK) {
+        return send_error(req, "400 Bad Request", err_msg[0] ? err_msg : "invalid dglab config");
+    }
+
+    err = dglab_socket_set_config(s_ctx.dglab, &cfg);
+    if (err != ESP_OK) {
+        return send_error(req, "500 Internal Server Error", "apply failed");
+    }
+    if (save) {
+        err = dglab_config_save(&cfg);
+        if (err != ESP_OK) {
+            return send_error(req, "500 Internal Server Error", "save failed");
+        }
+    }
+    if (reconnect) {
+        err = dglab_socket_reconnect(s_ctx.dglab);
+        if (err != ESP_OK) {
+            return send_error(req, "500 Internal Server Error", "reconnect failed");
+        }
+    }
+
+    dglab_status_t st = {0};
+    dglab_socket_get_status(s_ctx.dglab, &st);
+    cJSON *root = dglab_status_to_json(&st);
     if (!root) {
         return send_error(req, "500 Internal Server Error", "json alloc failed");
     }
@@ -934,6 +1108,11 @@ static esp_err_t handle_app_css(httpd_req_t *req)
     return send_static_file(req, "/spiffs/app.css", "text/css");
 }
 
+static esp_err_t handle_qrcode_js(httpd_req_t *req)
+{
+    return send_static_file(req, "/spiffs/qrcode.min.js", "application/javascript");
+}
+
 static esp_err_t handle_ws(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
@@ -974,7 +1153,12 @@ static esp_err_t handle_ws(httpd_req_t *req)
 static void ws_push_task(void *arg)
 {
     (void)arg;
-    char msg[768];
+    char *msg = heap_caps_malloc(WS_PUSH_MSG_MAX, MALLOC_CAP_8BIT);
+    if (!msg) {
+        ESP_LOGE(TAG, "ws_push buffer alloc failed");
+        vTaskDelete(NULL);
+        return;
+    }
 
     while (1) {
         control_config_t cfg = {0};
@@ -996,15 +1180,22 @@ static void ws_push_task(void *arg)
         }
         game_status_t gst = {0};
         game_config_t gcfg = {0};
+        dglab_status_t dst = {0};
         if (s_ctx.game) {
             game_engine_get_status(s_ctx.game, &gst);
             game_engine_get_config(s_ctx.game, &gcfg);
             apply_game_outputs_to_status(&st, &gst, &gcfg);
         }
-        int len = snprintf(msg, sizeof(msg),
+        if (s_ctx.dglab) {
+            dglab_socket_get_status(s_ctx.dglab, &dst);
+        }
+        int len = snprintf(msg, WS_PUSH_MSG_MAX,
                            "{\"ts\":%lld,\"pressure_kpa\":%.3f,\"temp_c\":%.2f,"
                            "\"sensor_status\":%u,\"dac\":{\"code\":%u,\"pd_mode\":%u,\"voltage\":%.3f},"
                            "\"pwm\":[%u,%u,%u,%u],\"ble\":{\"swing\":%u,\"vibrate\":%u},"
+                           "\"dglab\":{\"serverUrl\":\"%s\",\"connectionState\":\"%s\",\"websocketConnected\":%s,"
+                           "\"paired\":%s,\"clientId\":\"%s\",\"targetId\":\"%s\",\"qrText\":\"%s\","
+                           "\"lastErrorCode\":\"%s\",\"lastErrorText\":\"%s\",\"lastHeartbeatMs\":%lld},"
                            "\"game\":{\"running\":%s,\"paused\":%s,\"state\":\"%s\","
                            "\"currentPressure\":%.3f,\"averagePressure\":%.3f,\"currentIntensity\":%.2f,"
                            "\"targetIntensity\":%.2f,\"midPressure\":%.3f,\"criticalPressure\":%.3f,"
@@ -1020,6 +1211,16 @@ static void ws_push_task(void *arg)
                            st.pwm_permille[0], st.pwm_permille[1], st.pwm_permille[2], st.pwm_permille[3],
                            st.ble_swing,
                            st.ble_vibrate,
+                           dst.server_url,
+                           dglab_connection_state_to_string(dst.connection_state),
+                           dst.websocket_connected ? "true" : "false",
+                           dst.paired ? "true" : "false",
+                           dst.client_id,
+                           dst.target_id,
+                           dst.qr_text,
+                           dst.last_error_code,
+                           dst.last_error_text,
+                           (long long)dst.last_heartbeat_ms,
                            gst.running ? "true" : "false",
                            gst.paused ? "true" : "false",
                            game_state_to_string(gst.state),
@@ -1034,8 +1235,10 @@ static void ws_push_task(void *arg)
                            gst.shock_count,
                            gst.total_stimulation_time_s,
                            gst.is_shocking ? "true" : "false");
-        if (len > 0 && len < (int)sizeof(msg)) {
+        if (len > 0 && len < WS_PUSH_MSG_MAX) {
             ws_broadcast(msg);
+        } else if (len >= WS_PUSH_MSG_MAX) {
+            ESP_LOGW(TAG, "ws push payload truncated: len=%d cap=%d", len, WS_PUSH_MSG_MAX);
         }
 
         vTaskDelay(pdMS_TO_TICKS(1000 / ws_hz));
@@ -1044,7 +1247,7 @@ static void ws_push_task(void *arg)
 
 esp_err_t web_server_start(const web_server_ctx_t *ctx)
 {
-    if (!ctx || !ctx->control || !ctx->telemetry || !ctx->game) {
+    if (!ctx || !ctx->control || !ctx->dglab || !ctx->telemetry || !ctx->game) {
         return ESP_ERR_INVALID_ARG;
     }
     s_ctx = *ctx;
@@ -1052,7 +1255,7 @@ esp_err_t web_server_start(const web_server_ctx_t *ctx)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 8192;
-    config.max_uri_handlers = 16;
+    config.max_uri_handlers = 20;
     config.lru_purge_enable = true;
 
     esp_err_t err = httpd_start(&s_server, &config);
@@ -1100,6 +1303,21 @@ esp_err_t web_server_start(const web_server_ctx_t *ctx)
         .method = HTTP_POST,
         .handler = handle_post_game_config,
     };
+    httpd_uri_t dglab_config_get_uri = {
+        .uri = "/api/dglab/config",
+        .method = HTTP_GET,
+        .handler = handle_get_dglab_config,
+    };
+    httpd_uri_t dglab_config_post_uri = {
+        .uri = "/api/dglab/config",
+        .method = HTTP_POST,
+        .handler = handle_post_dglab_config,
+    };
+    httpd_uri_t dglab_status_uri = {
+        .uri = "/api/dglab/status",
+        .method = HTTP_GET,
+        .handler = handle_get_dglab_status,
+    };
     httpd_uri_t game_control_post_uri = {
         .uri = "/api/game/control",
         .method = HTTP_POST,
@@ -1126,6 +1344,11 @@ esp_err_t web_server_start(const web_server_ctx_t *ctx)
         .method = HTTP_GET,
         .handler = handle_app_css,
     };
+    httpd_uri_t qrcode_js_uri = {
+        .uri = "/qrcode.min.js",
+        .method = HTTP_GET,
+        .handler = handle_qrcode_js,
+    };
 
     httpd_register_uri_handler(s_server, &status_uri);
     httpd_register_uri_handler(s_server, &config_get_uri);
@@ -1135,14 +1358,18 @@ esp_err_t web_server_start(const web_server_ctx_t *ctx)
     httpd_register_uri_handler(s_server, &game_status_uri);
     httpd_register_uri_handler(s_server, &game_config_get_uri);
     httpd_register_uri_handler(s_server, &game_config_post_uri);
+    httpd_register_uri_handler(s_server, &dglab_config_get_uri);
+    httpd_register_uri_handler(s_server, &dglab_config_post_uri);
+    httpd_register_uri_handler(s_server, &dglab_status_uri);
     httpd_register_uri_handler(s_server, &game_control_post_uri);
     httpd_register_uri_handler(s_server, &ws_uri);
     httpd_register_uri_handler(s_server, &root_uri);
     httpd_register_uri_handler(s_server, &app_js_uri);
     httpd_register_uri_handler(s_server, &app_css_uri);
+    httpd_register_uri_handler(s_server, &qrcode_js_uri);
 
     if (!s_ws_task) {
-        xTaskCreate(ws_push_task, "ws_push", 4096, NULL, 5, &s_ws_task);
+        xTaskCreate(ws_push_task, "ws_push", 6144, NULL, 5, &s_ws_task);
     }
 
     ESP_LOGI(TAG, "HTTP server started");

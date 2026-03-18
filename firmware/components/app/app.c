@@ -24,6 +24,7 @@
 #include "dev_dac7571.h"
 #include "act_pwm_ledc.h"
 #include "ble_belt.h"
+#include "dglab_socket.h"
 #include "game_engine.h"
 
 #include "control_api.h"
@@ -52,6 +53,7 @@ static bus_i2c_t s_i2c = {0};
 static mcp_h11_t s_mcp = {0};
 static dac7571_t s_dac = {0};
 static pwm_ledc_t s_pwm = {0};
+static dglab_socket_t s_dglab = {0};
 static control_service_t s_service;
 static telemetry_t s_telemetry;
 static telemetry_point_t *s_telemetry_buf = NULL;
@@ -499,11 +501,20 @@ void app_start(void)
         game_config_save(&game_cfg);
     }
     game_engine_hw_t game_hw = {
-        .dac = &s_dac,
         .pwm = &s_pwm,
+        .dglab = &s_dglab,
         .i2c_mutex = s_i2c_mutex,
         .led = s_led,
     };
+
+    dglab_config_t dglab_cfg = {0};
+    err = dglab_config_load(&dglab_cfg);
+    if (err != ESP_OK || dglab_config_validate(&dglab_cfg, NULL, 0) != ESP_OK) {
+        dglab_config_set_defaults(&dglab_cfg);
+        dglab_config_save(&dglab_cfg);
+    }
+    ESP_ERROR_CHECK(dglab_socket_init(&s_dglab, &dglab_cfg));
+
     ESP_ERROR_CHECK(game_engine_init(&s_game, &game_hw, &game_cfg));
 
     // Allocate telemetry buffer from external memory (PSRAM) if available
@@ -527,6 +538,7 @@ void app_start(void)
 
     web_server_ctx_t ws_ctx = {
         .control = &s_service,
+        .dglab = &s_dglab,
         .telemetry = &s_telemetry,
         .game = &s_game,
     };
