@@ -6,7 +6,7 @@ config APP_WIFI_MAX_RETRY
 
 config APP_WIFI_PROV_POP
     string "BLE Provisioning Proof-of-Possession"
-    default "AE123"
+    default "abcd1234"
 
 config APP_WIFI_PROV_SERVICE_PREFIX
     string "BLE Provisioning Device Name Prefix"

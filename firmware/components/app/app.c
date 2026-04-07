@@ -42,7 +42,8 @@ static const char *TAG = "app";
 #define M1_GPIO             GPIO_NUM_11
 #define M2_GPIO             GPIO_NUM_12
 #define M3_GPIO             GPIO_NUM_13
-#define STATUS_LED_GPIO     GPIO_NUM_38
+#define STATUS_LED_GPIO     GPIO_NUM_1
+#define STATUS_LED_COUNT    2
 
 #define TELEMETRY_MAX_SEC   120
 #define TELEMETRY_MAX_HZ    100
@@ -233,7 +234,7 @@ static esp_err_t status_led_init(void)
 {
     led_strip_config_t strip_config = {
         .strip_gpio_num = STATUS_LED_GPIO,
-        .max_leds = 1,
+        .max_leds = STATUS_LED_COUNT,
     };
     led_strip_rmt_config_t rmt_config = {
         .resolution_hz = 10 * 1000 * 1000,
@@ -251,7 +252,9 @@ static void status_led_set(uint8_t r, uint8_t g, uint8_t b)
     if (!s_led) {
         return;
     }
-    led_strip_set_pixel(s_led, 0, g, r, b);
+    for (uint32_t i = 0; i < STATUS_LED_COUNT; ++i) {
+        led_strip_set_pixel(s_led, i, g, r, b);
+    }
     led_strip_refresh(s_led);
 }
 

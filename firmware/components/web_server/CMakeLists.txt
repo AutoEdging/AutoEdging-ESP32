@@ -1,3 +1,4 @@
 idf_component_register(SRCS "web_server.c"
                     INCLUDE_DIRS "include"
-                    REQUIRES esp_http_server spiffs control_api telemetry game_engine wifi_service json)
+                    REQUIRES esp_http_server spiffs control_api telemetry game_engine wifi_service espressif__cjson
+                    PRIV_REQUIRES vfs)
